@@ -1,0 +1,183 @@
+---
+title: "Bulk mapping in R"
+output: html_document
+date: "2025-01-31"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+if (!requireNamespace("Rsubread", quietly = TRUE)) {
+     install.packages("BiocManager")
+     BiocManager::install("Rsubread")
+ }
+```
+
+#Bat genome
+```{r}
+library(Rsubread)
+buildindex(basename = "bat",  # Prefix for the index files
+            reference = "/Users/ncbi_dataset/ncbi_dataset/data/GCF_021234435.1/GCF_021234435.1_CSHL_Jam_final_genomic.fna")
+```
+
+
+
+```{r}
+align(index = "bat",  # Use the same prefix from buildindex()
+       readfile1 = "/Users/118_S99_L004_R1_001.fastq.gz",  # Forward reads
+       readfile2 = "/Users/118_S99_L004_R2_001.fastq.gz",  # Reverse reads
+       input_format = "gzFASTQ",  # Use "FASTQ" if files are uncompressed
+       output_file = "118_aligned_reads.bam",  # Name for the output BAM file
+       nthreads = 4)
+```
+
+
+#feature counts for bat
+```{r}
+bat118_fc_results <- featureCounts(
+     files = "118_aligned_reads.bam", 
+     annot.ext = "/Users/ncbi_dataset/ncbi_dataset/data/GCF_021234435.1/genomic.gtf",  # Replace with your annotation file
+     isGTFAnnotationFile = TRUE,
+     isPairedEnd = TRUE,  # Since reads are paired-end
+     nthreads = 4,
+     GTF.featureType = "exon",
+     GTF.attrType = "gene_id"
+ )
+
+write.csv(data.frame(GeneID = rownames(bat118_fc_results$counts), Counts = bat118_fc_results$counts),
+          "bat118_gene_counts.csv", row.names = FALSE)
+
+#Output
+#fc_results$counts: A matrix with gene IDs as rows and read counts as values.
+#fc_results$annotation: Gene annotation details (useful for mapping gene IDs to names).
+#fc_results$stat: Summary of read assignment.
+
+```
+
+#Get RPKM
+```{r}
+gene_counts <- Henry_118_fc_results$counts
+gene_lengths <- Henry_118_fc_results$annotation$Length
+total_mapped_reads <- sum(gene_counts)
+gene_lengths_kb <- gene_lengths / 1000
+rpkm_values <- (gene_counts * 1e9) / (total_mapped_reads * gene_lengths_kb)
+Henry_118_rpkm_df <- data.frame(GeneID = rownames(gene_counts), RPKM = rpkm_values)
+head(Henry_118_rpkm_df)
+
+write.csv(Henry_118_rpkm_df, "Henry118_rpkm_values.csv", row.names = FALSE)
+```
+
+#Write a loop to run multiple samples:
+
+```{r}
+library(Rsubread)
+
+# Define paths
+fastq_path <- "/Users/10682_250124B9/"
+index_name <- "bat"  # Prefix for the reference index
+
+# Generate sample names and their corresponding S numbers
+sample_ids <- 118:129  
+s_numbers <- 99:110    # S99 to S110 (adjust based on your actual pattern)
+
+# Loop through samples
+for (i in seq_along(sample_ids)) {
+  sample <- paste0("bat_", sample_ids[i])
+  s_number <- s_numbers[i]  # Get the corresponding S number
+
+  # Construct file names with the correct S number
+  read1 <- paste0(fastq_path, sample, "_S", s_number, "_L004_R1_001.fastq.gz")
+  read2 <- paste0(fastq_path, sample, "_S", s_number, "_L004_R2_001.fastq.gz")
+  bam_output <- paste0(sample, "_aligned_reads.bam")
+
+  # Debugging output to verify file paths
+  cat("Checking files for:", sample, "\n")
+  cat("Read 1:", read1, "Exists?", file.exists(read1), "\n")
+  cat("Read 2:", read2, "Exists?", file.exists(read2), "\n")
+
+  # Run alignment only if files exist
+  if (file.exists(read1) & file.exists(read2)) {
+    align(index = index_name, 
+          readfile1 = read1,
+          readfile2 = read2,
+          input_format = "gzFASTQ",
+          output_file = bam_output,
+          nthreads = 4)
+    cat("Finished mapping:", sample, "\n")
+  } else {
+    cat("Skipping", sample, "due to missing files.\n")
+  }
+}
+
+
+```
+
+#feature counts for bat
+```{r}
+# Define annotation file
+annotation_file <- "/Users/cbc54/ncbi_dataset/ncbi_dataset/data/GCF_021234435.1/genomic.gtf"
+
+# Get BAM file paths
+bam_files <- paste0(sample_names, "_aligned_reads.bam")
+
+# Run featureCounts
+fc_results <- featureCounts(
+  files = bam_files, 
+  annot.ext = annotation_file,  
+  isGTFAnnotationFile = TRUE,
+  isPairedEnd = TRUE,  
+  nthreads = 4,
+  GTF.featureType = "exon",
+  GTF.attrType = "gene_id"
+)
+
+# Save unique gene read counts
+write.csv(data.frame(GeneID = rownames(fc_results$counts), fc_results$counts),
+          "All_Samples_Gene_Counts.csv", row.names = FALSE)
+
+```
+
+
+#RPKM for bat
+```{r}
+# Extract gene counts
+gene_counts <- fc_results$counts
+
+# Extract gene lengths
+gene_lengths <- fc_results$annotation$Length  # Length in base pairs
+gene_lengths_kb <- gene_lengths / 1000  # Convert to kilobases
+
+# Compute total mapped reads for each sample
+total_mapped_reads <- colSums(gene_counts)
+
+# Compute RPKM for all samples
+rpkm_values <- sweep(gene_counts * 1e9, 1, (total_mapped_reads * gene_lengths_kb), "/")
+
+# Save RPKM values
+rpkm_df <- data.frame(GeneID = rownames(gene_counts), rpkm_values)
+write.csv(rpkm_df, "All_Samples_RPKM.csv", row.names = FALSE)
+
+```
+
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+summary(cars)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
