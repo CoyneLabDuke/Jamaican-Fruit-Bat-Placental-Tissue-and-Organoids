@@ -1,0 +1,210 @@
+---
+title: "LOC gene identification"
+output: html_document
+date: "2025-04-02"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+**Defining LOC genes in bat genome***
+```{r}
+# Load Required Libraries
+library(rentrez)
+
+# ================================
+# 1️⃣ Function to Retrieve Gene IDs from LOC IDs
+# ================================
+get_ncbi_gene_id <- function(loc_id) {
+    search <- entrez_search(db="gene", term=paste0(loc_id, "[Gene Name] AND Artibeus jamaicensis[Organism]"))
+    
+    if (!is.null(search$ids) && length(search$ids) > 0) {
+        return(search$ids[1])  # Return the first Gene ID
+    } else {
+        return(NA)  # Return NA if no match found
+    }
+}
+
+# ================================
+# 2️⃣ Load LOC Gene List
+# ================================
+# Make sure the LOC gene list is in a CSV file
+genes <- read.csv("/Users/cbc54/Downloads/AllLOC.csv", stringsAsFactors=FALSE)
+
+# Ensure column names are correct
+colnames(genes)[colnames(genes) == "Gene"] <- "LOC_ID"
+
+# Convert LOC_ID to character
+genes$LOC_ID <- as.character(genes$LOC_ID)
+
+# ================================
+# 3️⃣ Retrieve Gene IDs for Each LOC Gene
+# ================================
+genes$GeneID <- unlist(lapply(genes$LOC_ID, function(x) {
+    res <- tryCatch(get_ncbi_gene_id(x), error = function(e) NA)
+    return(res)
+}))
+
+# Check results
+head(genes)
+
+# ================================
+# 4️⃣ Function to Retrieve Gene Descriptions
+# ================================
+get_gene_summary <- function(gene_id) {
+    if (!is.na(gene_id) && gene_id != "") {
+        summary <- tryCatch(entrez_summary(db="gene", id=gene_id), error = function(e) NULL)
+        
+        if (!is.null(summary)) {
+            name <- ifelse(!is.null(summary$name), summary$name, NA)
+            description <- ifelse(!is.null(summary$description) && summary$description != "", 
+                                  summary$description, 
+                                  ifelse(!is.null(summary$otherdesignations), summary$otherdesignations, NA))
+            
+            return(data.frame(
+                GeneID = gene_id,
+                Name = name,
+                Description = description,
+                stringsAsFactors = FALSE
+            ))
+        } else {
+            return(data.frame(GeneID = gene_id, Name = NA, Description = NA, stringsAsFactors = FALSE))
+        }
+    } else {
+        return(data.frame(GeneID = gene_id, Name = NA, Description = NA, stringsAsFactors = FALSE))
+    }
+}
+
+# ================================
+# 5️⃣ Fetch Descriptions for All Gene IDs
+# ================================
+annotations <- do.call(rbind, lapply(genes$GeneID, get_gene_summary))
+
+# Check results
+head(annotations)
+
+# ================================
+# 6️⃣ Merge Data and Save Final Annotated File
+# ================================
+final_data <- merge(genes, annotations, by="GeneID", all.x=TRUE)
+
+# View final annotated data
+head(final_data)
+
+# Save the annotated gene list
+write.csv(final_data, "LOC_annotated_genes.csv", row.names=FALSE)
+
+```
+
+
+```{r}
+# Load Required Libraries
+library(rentrez)
+
+# ================================
+# 1️⃣ Function to Retrieve Gene IDs from LOC IDs
+# ================================
+get_ncbi_gene_id <- function(loc_id) {
+    search <- entrez_search(db="gene", term=paste0(loc_id, "[Gene Name] AND Artibeus jamaicensis[Organism]"))
+    
+    if (!is.null(search$ids) && length(search$ids) > 0) {
+        return(search$ids[1])  # Return the first Gene ID
+    } else {
+        return(NA)  # Return NA if no match found
+    }
+}
+
+# ================================
+# 2️⃣ Load LOC Gene List
+# ================================
+# Make sure the LOC gene list is in a CSV file
+genes <- read.csv("/Users/cbc54/Downloads/AllLOC.csv", stringsAsFactors=FALSE)
+
+# Ensure column names are correct
+colnames(genes)[colnames(genes) == "Gene"] <- "LOC_ID"
+
+# Convert LOC_ID to character
+genes$LOC_ID <- as.character(genes$LOC_ID)
+
+# ================================
+# 3️⃣ Retrieve Gene IDs for Each LOC Gene
+# ================================
+genes$GeneID <- unlist(lapply(genes$LOC_ID, function(x) {
+    res <- tryCatch(get_ncbi_gene_id(x), error = function(e) NA)
+    return(res)
+}))
+
+# Check results
+head(genes)
+
+# ================================
+# 4️⃣ Function to Retrieve Gene Descriptions & Gene Type
+# ================================
+get_gene_summary <- function(gene_id) {
+    if (!is.na(gene_id) && gene_id != "") {
+        summary <- tryCatch(entrez_summary(db="gene", id=gene_id), error = function(e) NULL)
+        
+        if (!is.null(summary)) {
+            name <- ifelse(!is.null(summary$name), summary$name, NA)
+            description <- ifelse(!is.null(summary$description) && summary$description != "", 
+                                  summary$description, 
+                                  ifelse(!is.null(summary$otherdesignations), summary$otherdesignations, NA))
+            gene_type <- ifelse(!is.null(summary$status), summary$status, NA)  # Extract Gene Type
+            
+            return(data.frame(
+                GeneID = gene_id,
+                Name = name,
+                Description = description,
+                GeneType = gene_type,
+                stringsAsFactors = FALSE
+            ))
+        } else {
+            return(data.frame(GeneID = gene_id, Name = NA, Description = NA, GeneType = NA, stringsAsFactors = FALSE))
+        }
+    } else {
+        return(data.frame(GeneID = gene_id, Name = NA, Description = NA, GeneType = NA, stringsAsFactors = FALSE))
+    }
+}
+
+# ================================
+# 5️⃣ Fetch Descriptions & Gene Type for All Gene IDs
+# ================================
+annotations <- do.call(rbind, lapply(genes$GeneID, get_gene_summary))
+
+# Check results
+head(annotations)
+
+# ================================
+# 6️⃣ Merge Data and Save Final Annotated File
+# ================================
+final_data <- merge(genes, annotations, by="GeneID", all.x=TRUE)
+
+# View final annotated data
+head(final_data)
+
+# Save the annotated gene list
+write.csv(final_data, "LOC_annotated_genes_with_type.csv", row.names=FALSE)
+
+```
+
+
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+summary(cars)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
