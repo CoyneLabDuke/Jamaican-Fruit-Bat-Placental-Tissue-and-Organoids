@@ -1,0 +1,643 @@
+
+---
+title: "Bat Placental snRNA-seq Analysis"
+author: "Your Name"
+date: "2025-04-02"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+library(Seurat)
+library(dplyr)
+library(ggplot2)
+library(patchwork)
+library(ggrepel)
+```
+
+# 1. Load Data
+```{r load-data}
+Plac1.data <- Read10X(data.dir ="Bat placental tissue snRNASeq/Placenta_1/filtered_feature_bc_matrix")
+Plac1 <- CreateSeuratObject(counts = Plac1.data, project = "Plac1", min.cells = 3, min.features = 200)
+Plac2.data <- Read10X(data.dir ="Bat placental tissue snRNASeq/Placenta_2/filtered_feature_bc_matrix")
+Plac2 <- CreateSeuratObject(counts = Plac2.data, project = "Plac2", min.cells = 3, min.features = 200)
+Plac4.data <- Read10X(data.dir ="Bat placental tissue snRNASeq/Placenta_4/filtered_feature_bc_matrix")
+Plac4 <- CreateSeuratObject(counts = Plac4.data, project = "Plac4", min.cells = 3, min.features = 200)
+Plac6.data <- Read10X(data.dir ="Bat placental tissue snRNASeq/Placenta_6/filtered_feature_bc_matrix")
+Plac6 <- CreateSeuratObject(counts = Plac6.data, project = "Plac6", min.cells = 3, min.features = 200)
+```
+
+# 2. Merge data
+```{r merge}
+Plac.merge <- merge(Plac1, y = c(Plac2, Plac4, Plac6), project = "Placenta Tissue")
+```
+
+# 3. Quality Control Summary
+
+```{r mt genes}
+# Define the mitochondrial gene list
+mito.genes <- c("ND5", "ND4", "ND3", "ND1", "ND2", "ND6", "ND4L", 
+                "CYTB", "COX2", "ATP8", "ATP6", "COX3", "COX1")
+
+```
+
+```{r percent features}
+Plac.merge[["percent.mt.custom"]] <- PercentageFeatureSet(Plac.merge, features = mito.genes)
+Plac.merge[["percent.rb"]] <- PercentageFeatureSet(Plac.merge, pattern = "^RP[SL]")
+```
+
+
+```{r qc-summary}
+VlnPlot(
+  object = Plac.merge,
+  features = c("nCount_RNA", "nFeature_RNA", "percent.mt.custom", "percent.rb"),
+  ncol = 4,
+  pt.size = 0.5)
+```
+
+```{r subset}
+subset(
+     Plac.merge,
+     nFeature_RNA>300 & 
+         nFeature_RNA < 9000 & nCount_RNA<20000 & percent.rb<1.2 & percent.mt.custom<1.5)-> Plac.QC
+```
+
+```{r check dims}
+dim(Plac.merge)
+dim(Plac.QC)
+```
+
+# 4. Normalization (SCTransform)
+```{r normalization}
+Plac.join <-JoinLayers(Plac.QC) 
+Plac.split <- split(Plac.join, f = Plac.join$orig.ident)
+options(future.globals.maxSize = 3 * 1024^3)  # Increases limit to 3GB
+Plac.SCT <-SCTransform(Plac.split, vars.to.regress = c('nFeature_RNA', 'nCount_RNA', 'percent.rb', 'percent.mt.custom'), verbose = TRUE)
+```
+
+# 5. Dimensionality Reduction and Clustering
+```{r dim-reduction-clustering}
+Plac.SCT <- RunPCA(Plac.SCT, verbose=T)
+ElbowPlot(Plac.SCT, reduction = "pca", ndims = 50)
+Plac.SCT <- FindNeighbors(Plac.SCT, dims = 1:20, reduction = "pca")
+Plac.SCT <- FindClusters(Plac.SCT, resolution = 0.2, cluster.name = "unintegrated_clusters")
+Plac.SCT <- RunUMAP(Plac.SCT, dims = 1:20, reduction = "pca", reduction.name = "umap.unintegrated")
+```
+
+# 6. UMAP Visualization
+```{r umap-plot}
+DimPlot(Plac.SCT, reduction = "umap.unintegrated", raster=TRUE, pt.size=2)
+DimPlot(Plac.SCT, reduction = "umap.unintegrated", split.by = "orig.ident", raster=TRUE, pt.size=2)
+```
+
+# 7. Integration
+```{r markers}
+Plac.harm <- IntegrateLayers(
+  object = Plac.SCT, method = HarmonyIntegration,
+  orig.reduction = "pca", new.reduction = "harmony",
+  verbose = TRUE
+)
+```
+
+```{r dim-reduction-clustering-integrated}
+Plac.harm <- FindNeighbors(Plac.harm, reduction = "harmony", dims = 1:30)
+Plac.harm <- FindClusters(Plac.harm, resolution = 0.8, cluster.name = "harmony_clusters")
+Plac.harm <- RunUMAP(Plac.harm, reduction = "harmony", dims = 1:30, reduction.name = "umap.harmony")
+```
+
+```{r umap-plot-integrated}
+DimPlot(
+    Plac.harm,    reduction = "umap.harmony",
+     group.by = c("orig.ident", "harmony_clusters",
+     combine = FALSE), pt.size=1.5, raster=TRUE, label=T)
+```
+
+# 8. Normalize and identify markers
+```{r normalize}
+DefaultAssay(Plac.harm) <- "RNA"
+Plac.harm<-NormalizeData(Plac.harm)
+Plac.harm<-ScaleData(Plac.harm)
+```
+
+```{r markers}
+Plac.join <-JoinLayers(Plac.harm)
+Bat_placenta.markers <- FindAllMarkers(object = Plac.join, assay = "RNA", thresh.use = 0.25, min.pct = 0.25, only.pos = TRUE)
+write.csv(Bat_placenta.markers, file="Bat_placenta.markers.csv")
+```
+
+# 9. ALRA imputation
+
+```{r}
+DefaultAssay(Plac.join) <- "SCT"
+Placenta.alra <- RunALRA(Plac.join, setDelfaultAssay=FALSE, verbose=TRUE, k=63)
+```
+
+```{r}
+saveRDS(Placenta.alra, file = "Bat_placenta_tissue.rds")
+```
+
+# 10. Example: subclustering Trophoblasts (optional)
+```{r subclustering}
+# Example: Subset cluster 3 for subclustering
+Trophs <- subset(Placenta.alra, idents = c("Troph-p", "Troph-1", "Troph-2",  "Troph-3", "Troph-4", "Troph-5", "Troph-6", "Troph-7"))
+DefaultAssay(Trophs) <- "SCT"
+Plac.SCT <- RunPCA(Trophs, verbose=T)
+ElbowPlot(Plac.SCT, reduction = "pca", ndims = 50)
+Plac.harm <- FindNeighbors(Plac.SCT, reduction = "harmony", dims = 1:20)
+Plac.harm <- FindClusters(Plac.harm, resolution = 0.4, cluster.name = "harmony_clusters")
+Plac.harm <- RunUMAP(Plac.harm, reduction = "harmony", dims = 1:20, reduction.name = "umap.harmony")
+```
+
+```{r}
+DimPlot(Plac.harm, reduction = "umap.harmony",  pt.size=1, label=T)
+```
+
+```{r}
+Bat_placenta.troph.markers <- FindAllMarkers(object = Plac.harm, assay = "RNA", thresh.use = 0.25, min.pct = 0.25, only.pos = TRUE)
+write.csv(Bat_placenta.troph.markers, file="Bat_placenta.troph.markers.csv")
+```
+
+# 11. Pseudotime on trophoblasts
+```{r slingshot}
+DefaultAssay(TissueTrophs)  <- "SCT"
+Trophs.sce <- as.SingleCellExperiment(TissueTroph2)
+```
+
+```{r}
+Traj1.scecl <- slingshot(Trophs.sce, 
+                         clusterLabels = 'ident', 
+                         reducedDim = "UMAP.HARMONY", 
+                         start.clus = "CTB-p",  # Set starting cluster
+                         allow.breaks = FALSE)
+```
+
+```{r}
+slo <- SlingshotDataSet(Traj1.scecl)
+slo
+```
+
+```{r}
+Curves <- slingCurves(Traj1.scecl)
+Curve1XY <- data.frame(X = Curves$Lineage1$s[,1], Y = Curves$Lineage1$s[,2])
+Curve2XY <- data.frame(X = Curves$Lineage2$s[,1], Y = Curves$Lineage2$s[,2])
+Curve3XY <- data.frame(X = Curves$Lineage3$s[,1], Y = Curves$Lineage3$s[,2])
+
+# Extract Pseudotime Values
+TissueTrophs$pseudotime1 <- Traj1.scecl$slingPseudotime_1
+TissueTrophs$pseudotime2 <- Traj1.scecl$slingPseudotime_2
+TissueTrophs$pseudotime3 <- Traj1.scecl$slingPseudotime_3
+```
+
+```{r}
+library(scales)
+
+# Rescale each pseudotime to 0-100, ensuring NA values are kept
+TissueTrophs$pseudotime1 <- ifelse(is.na(TissueTrophs$pseudotime1), NA, rescale(TissueTrophs$pseudotime1, to = c(0, 100)))
+TissueTrophs$pseudotime2 <- ifelse(is.na(TissueTrophs$pseudotime2), NA, rescale(TissueTrophs$pseudotime2, to = c(0, 100)))
+TissueTrophs$pseudotime3 <- ifelse(is.na(TissueTrophs$pseudotime3), NA, rescale(TissueTrophs$pseudotime3, to = c(0, 100)))
+
+# Verify new ranges
+summary(TissueTrophs$pseudotime1)
+summary(TissueTrophs$pseudotime2)
+summary(TissueTrophs$pseudotime3)
+```
+```{r}
+library(ggplot2)
+library(tidyr)
+library(dplyr)
+
+# Extract UMAP coordinates
+umap_coords <- Embeddings(TissueTrophs, "umap.harmony")
+
+# Create a dataframe combining UMAP and pseudotimes
+df <- data.frame(
+  Cell = rownames(umap_coords),
+  UMAP1 = umap_coords[,1],
+  UMAP2 = umap_coords[,2],
+  pseudotime1 = TissueTrophs$pseudotime1,
+  pseudotime2 = TissueTrophs$pseudotime2,
+  pseudotime3 = TissueTrophs$pseudotime3
+)
+
+# Convert to long format for facetting
+df_long <- pivot_longer(df, cols = starts_with("pseudotime"), 
+                        names_to = "PseudotimeType", values_to = "Pseudotime")
+
+# Ensure NA values remain NA for proper grey coloring
+df_long$Pseudotime[df_long$Pseudotime == 0] <- NA
+
+
+```
+
+```{r}
+# Assign each curve its corresponding pseudotime label
+Curve1XY$PseudotimeType <- "pseudotime1"
+Curve2XY$PseudotimeType <- "pseudotime2"
+Curve3XY$PseudotimeType <- "pseudotime3"
+
+# Combine all curves into one dataframe
+curve_data <- bind_rows(Curve1XY, Curve2XY, Curve3XY)
+
+
+```
+
+```{r}
+library(grid)
+library(ggplot2)
+
+ggplot() + 
+    # Scatter plot for UMAP with pseudotime coloring
+    geom_point(data = df_long, aes(x = UMAP1, y = UMAP2, color = Pseudotime), size = 1, na.rm = FALSE) +  
+    scale_color_gradientn(colors = c("#5E4FA2", "#3288BD", "#66C2A5", "#ABDDA4", "#E6F598", 
+                                     "#FEE08B", "#FDAE61", "#F46D43", "#D53E4F", "#9E0142"),
+                          limits = c(0, 100), 
+                          na.value = "grey50") +  # Force NA values to grey
+    # Add trajectory curves with arrowheads at the end
+    geom_path(data = curve_data, aes(x = X, y = Y, group = PseudotimeType), 
+              size = 1, linetype = "dashed", color = "black",
+              arrow = arrow(type = "closed", length = unit(0.2, "inches"))) +  # Arrow at end of lines
+    facet_wrap(~PseudotimeType) +  # Facet by pseudotime type
+    theme_minimal(base_size = 16) +
+    theme(panel.grid = element_blank(),
+          axis.ticks = element_blank(),
+          legend.key = element_blank(),
+          plot.background = element_blank(),
+          axis.line = element_line(size = 1, color = "black"),
+          text = element_text(size = 18)) +
+    ggtitle("Pseudotime Trajectories")
+```
+
+```{r}
+counts <- as.matrix(GetAssayData(TissueTrophs2, assay = "RNA", slot = "counts"))
+filt_counts <- counts[rowSums(counts > 5) > ncol(counts) / 20, ]
+BPPARAM <- BiocParallel::bpparam()
+BPPARAM$workers <- 8
+library(tradeSeq) 
+sce2 <- fitGAM(filt_counts,
+              sds = slo,
+              nknots = 4, 
+              sce = TRUE, 
+              verbose = TRUE) 
+```
+
+```{r}
+assoRes_Tissue <- associationTest(sce2, lineages = TRUE)
+write.csv(assoRes_Tissue, file="assoRes_batTissue.UMAP.3.17.25.csv")
+```
+
+```{r}
+p.adjusted <- p.adjust(assoRes_Tissue$pvalue, method = "fdr")
+assoRes_Tissue$adjustedPValue <- p.adjusted
+significantGenes <- assoRes_Tissue[which(assoRes_Tissue$adjustedPValue < 0.05), ]
+write.csv(significantGenes, file="assoRes_Tissue.significantGenes.UMAP.3.17.25.csv")
+```
+
+```{r export-direction}
+library(dplyr)
+
+# Assuming you have the 'waldstat' in the 'sce' object
+waldstat_df <- as.data.frame(rowData(sce2)$waldStat) %>%
+    rownames_to_column("gene")
+
+smoothers <- predictSmooth(sce2, gene = rownames(sce2), nPoints = 100)
+direction_df <- smoothers %>%
+    group_by(gene, lineage) %>%
+    arrange(time) %>%
+    summarize(direction = case_when(
+        all(diff(yhat) > 0) ~ "increasing",
+        all(diff(yhat) < 0) ~ "decreasing",
+        TRUE ~ "mixed"
+    )) %>%
+    ungroup()
+
+# Join direction_df with waldstat_df
+output_df <- direction_df %>%
+    left_join(waldstat_df, by = "gene")
+
+# Write the output to a file
+write.csv(output_df, "output_file.csv", row.names = FALSE)
+
+```
+
+```{r}
+increasing_genes <- direction_df %>% filter(direction == "increasing")
+decreasing_genes <- direction_df %>% filter(direction == "decreasing")
+write.csv(increasing_genes, "increasing_genes.csv", row.names = FALSE)
+write.csv(decreasing_genes, "decreasing_genes.csv", row.names = FALSE)
+```
+
+# 12. Pathway analysis
+```{r GEO}
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(dplyr)
+library(ggplot2)
+
+# 1. Perform GO enrichment per cluster
+trophs_go_results <- lapply(unique(trophs_cluster_markers$cluster), function(cluster) {
+    genes <- trophs_cluster_markers %>%
+        filter(cluster == !!cluster) %>%
+        pull(gene)
+
+    ego_result <- enrichGO(
+        gene          = genes,
+        OrgDb         = org.Hs.eg.db,
+        keyType       = "SYMBOL",
+        ont           = "MF",  # Change to "BP" or "CC" if preferred
+        pAdjustMethod = "BH",
+        pvalueCutoff  = 0.05,
+        qvalueCutoff  = 0.05
+    )
+
+    return(ego_result)
+})
+names(trophs_go_results) <- unique(trophs_cluster_markers$cluster)
+
+# 2. Extract and combine results into a dataframe
+extract_go_results <- function(go_list) {
+    combined_results <- lapply(names(go_list), function(cluster) {
+        enrich_result <- go_list[[cluster]]
+        if (!is.null(enrich_result) && nrow(enrich_result@result) > 0) {
+            df <- as.data.frame(enrich_result@result)
+            df$Cluster <- cluster
+            return(df)
+        } else {
+            return(NULL)
+        }
+    })
+
+    combined_results <- combined_results[!sapply(combined_results, is.null)]
+
+    if (length(combined_results) > 0) {
+        combined_results <- do.call(rbind, combined_results)
+    } else {
+        combined_results <- data.frame()
+    }
+
+    return(combined_results)
+}
+
+# 3. Extract and keep top 5 pathways per cluster
+combined_go_results <- extract_go_results(trophs_go_results)
+
+top5_per_cluster <- combined_go_results %>%
+    group_by(Cluster) %>%
+    slice_min(order_by = p.adjust, n = 5) %>%
+    ungroup()
+
+# 4. Arrange for plotting
+unique_pathways <- top5_per_cluster %>%
+    arrange(Cluster, p.adjust) %>%
+    mutate(Description = factor(Description, levels = unique(Description)))
+
+library(forcats)
+
+unique_pathways <- unique_pathways %>%
+    mutate(
+        Cluster = factor(Cluster, levels = c("CTB-p", "CTB-1", "CTB-2", "CTB-3", "STB-3", "STB-2", "STB-1")),
+        Description = fct_reorder2(Description, Cluster, -log10(p.adjust))
+    )
+
+
+
+```
+
+```{r}
+library(ggplot2)
+library(viridis)
+
+ggplot(unique_pathways, aes(x = Cluster, y = Description)) +
+    geom_point(aes(size = Count, fill = -log10(p.adjust)),
+               shape = 21, color = "black", stroke = 0.4) +
+    scale_fill_viridis_c(
+        option = "viridis",    # This is the default viridis palette
+        direction = 1,
+        name = "-log10(adj p-value)"
+    ) +
+    scale_size_continuous(range = c(2, 7)) +
+    theme_minimal(base_size = 11) +
+    theme(
+        panel.background = element_rect(fill = "grey98", color = NA),
+        panel.grid.major = element_line(color = "grey80", linewidth = 0.3),
+        panel.grid.minor = element_blank(),
+        panel.border = element_rect(color = "black", fill = NA, size = 0.6),
+        axis.text.y = element_text(size = 9),
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 9),
+        legend.position = "right"
+    ) +
+    labs(
+        title = "Top 5 Enriched GO Molecular Function Terms per Cluster",
+        x = "Cluster",
+        y = "GO Term",
+        fill = "-log10(adj p-value)",
+        size = "Gene Count"
+    )
+
+```
+
+# 13. Cross species analysis
+```{r}
+mouse <- readRDS("Mouse.rds")
+bat <- readRDS("Bat.rds")
+first <- readRDS("Human.rds")
+first$stim <- "human"
+mouse$stim <- "mouse"
+bat$stim <- "bat"
+DefaultAssay(mouse) <- "RNA"
+DefaultAssay(first) <- "RNA"
+DefaultAssay(bat) <- "RNA"
+
+```
+
+```{r}
+first <- JoinLayers(first)
+bat <- JoinLayers(bat)
+mouse <- JoinLayers(mouse)
+```
+
+
+```{r}
+counts_like <- LayerData(mouse, assay = "RNA", layer = "data")
+mouse[["RNA"]] <- SetAssayData(mouse[["RNA"]], layer = "counts", new.data = counts_like)
+Layers(mouse[["RNA"]])
+```
+
+
+```{r}
+# Use counts layer from RNA assay
+genes_human_rna <- rownames(LayerData(first, assay = "RNA", layer = "counts"))
+genes_bat_rna   <- rownames(LayerData(bat, assay = "RNA", layer = "counts"))
+genes_mouse_rna <- rownames(LayerData(mouse, assay = "RNA", layer = "counts"))
+
+shared_genes_rna <- Reduce(intersect, list(genes_human_rna, genes_bat_rna, genes_mouse_rna))
+length(shared_genes_rna)
+
+```
+
+```{r}
+first_rna_sub <- subset(first, features = shared_genes_rna)
+bat_rna_sub   <- subset(bat, features = shared_genes_rna)
+mouse_rna_sub <- subset(mouse, features = shared_genes_rna)
+
+```
+
+```{r}
+genes_human_alra <- rownames(LayerData(first, assay = "alra", layer = "data"))
+genes_bat_alra   <- rownames(LayerData(bat, assay = "alra", layer = "data"))
+genes_mouse_alra <- rownames(LayerData(mouse, assay = "alra", layer = "data"))
+
+shared_genes_alra <- Reduce(intersect, list(genes_human_alra, genes_bat_alra, genes_mouse_alra))
+length(shared_genes_alra)
+
+```
+
+```{r}
+shared_genes_final <- intersect(shared_genes_rna, shared_genes_alra)
+length(shared_genes_final)
+
+```
+
+```{r}
+# Subset all objects by the final shared gene list
+first_sub  <- subset(first, features = shared_genes_final)
+bat_sub    <- subset(bat, features = shared_genes_final)
+mouse_sub  <- subset(mouse, features = shared_genes_final)
+
+# Optional: confirm RNA and ALRA both have same features
+stopifnot(all.equal(
+  rownames(first_sub[["RNA"]]), rownames(first_sub[["alra"]])
+))
+
+```
+
+
+```{r}
+first.SCT <- SCTransform(
+     first_sub, 
+     new.assay.name = "SCT", 
+    verbose = TRUE, 
+     vars.to.regress = intersect(colnames(first_sub@meta.data), c('nFeature_RNA', 'nCount_RNA', 'percent.rb', 'percent.mt', "pct_chrX", "pct_chrY")) # Only regress existing metadata
+ )
+
+ bat.SCT <- SCTransform(
+    bat_sub, 
+     new.assay.name = "SCT", 
+     verbose = TRUE, 
+     vars.to.regress = intersect(colnames(bat_sub@meta.data), c('nFeature_RNA', 'nCount_RNA', 'percent.rb', 'percent.mt.custom')) # Only regress existing metadata
+ )
+ 
+mouse.SCT <- SCTransform(
+     mouse_sub, 
+     new.assay.name = "SCT", 
+    verbose = TRUE, 
+     vars.to.regress = intersect(colnames(mouse_sub@meta.data), c('nFeature_RNA', 'nCount_RNA', 'percent.rb', 'percent.mt')) # Only regress existing metadata
+ ) 
+```
+
+```{r}
+Combined <- merge(bat.SCT, y = c(first.SCT, mouse.SCT), project = "Combined")
+```
+
+```{r}
+# Verify successful merge
+print(Assays(Combined))  # Should now include "SCT"
+Layers(Combined[["SCT"]])  # Should show "counts", "data", "scale.data"
+
+```
+
+```{r}
+# Define variable features
+VariableFeatures(Combined[["SCT"]]) <- rownames(Combined[["SCT"]]@scale.data)
+
+# Run PCA
+Combined.harm <- RunPCA(Combined, assay = "SCT", npcs = 50)
+```
+
+
+```{r Integrate}
+DefaultAssay(Combined.harm)  <- "SCT"
+Combined.harm <- IntegrateLayers(
+  object = Combined.harm, method = HarmonyIntegration,
+  orig.reduction = "pca", new.reduction = "harmony",group.by.vars = "stim", assay.use = "SCT",
+  verbose = TRUE
+)
+
+```
+
+```{r}
+ElbowPlot(Combined.harm, reduction = "pca", ndims = 50)
+```
+
+
+```{r}
+Combined.harm  <- FindNeighbors(Combined.harm, reduction = "harmony", dims = 1:40)
+DefaultAssay(Combined.harm)  <- "SCT"
+Combined.harm  <-FindClusters(Combined.harm, resolution = 0.2, cluster.name = "harmony_clusters")
+```
+
+
+```{r}
+Combined.harm <- RunUMAP(Combined.harm, reduction = "harmony", dims = 1:40, reduction.name = "umap.harmony")
+```
+
+
+```{r}
+DimPlot(Combined.harm, reduction = "umap.harmony", pt.size = 1, label.size = 5, label=T)
+DimPlot(Combined.harm, reduction = "umap.harmony", split.by="stim", pt.size = 1, label=T,
+        label.size = 5)
+```
+
+```{r cluster enrichment by species}
+table(Combined.harm$seurat_clusters, Combined.harm$stim)
+prop.table(table(Combined.harm$seurat_clusters, Combined.harm$stim), margin = 1)
+
+library(ggplot2)
+library(dplyr)
+
+# Create a summary dataframe
+df <- as.data.frame(table(Cluster = Combined.harm$seurat_clusters, Stim = Combined.harm$stim))
+
+df <- df %>%
+     group_by(Cluster) %>%
+     mutate(Prop = Freq / sum(Freq))
+```
+
+```{r}
+write.csv(df, file="cluster enrichment by species.csv")
+```
+
+
+# 14. Example DotPlot, FeaturePlot, Trajectory, and DimPlot codes
+```{r FeaturePlot}
+FeaturePlot(bat3, reduction = "umap.harmony", pt.size = 0.5, feature = 'alra_TFAP2A', min.cutoff = "q1", max.cutoff = "q99", col = c('grey80', '#FF4500'))
+```
+
+```{r DotPlot}
+DotPlot(object, features = genes_of_interest, dot.scale = 8, scale = T, col.min = 0, col.max = 1) + theme(legend.direction = "vertical")+   theme(legend.position="bottom")+ theme(legend.title = element_text(color = "black", size = 10), legend.text = element_text(color = "black", size = 10))+ theme(legend.key.height= unit(0.45, 'cm'), legend.key.width= unit(0.5, 'cm')) + theme(legend.key.height= unit(0.45, 'cm'), legend.key.width= unit(0.5, 'cm')) + scale_color_gradientn(colors = (brewer.pal(n = 11, name = "OrRd"))) +guides(col = guide_colourbar(title = "Mean expression")) + labs(size="% cells") + RotatedAxis() +     geom_point(aes(size=pct.exp), shape = 21, colour="black", stroke=0.5)  +guides(size=guide_legend(override.aes=list(shape=21, colour="black", fill="white")))
+```
+
+```{r Trajectory}
+plotExpression(Traj1.scecl, "CRH", x = "slingPseudotime_3",
+               colour_by = "ident", show_violin = FALSE, show_smooth = TRUE, point_size=2.0) + scale_color_manual(values=c( "CTB-p" = "#FFD700","CTB-1" = "#FF7F0E", "CTB-2" = "#FF4500",  "CTB-3" = "#D62728",  "STB-1" = "#A020F0", "STB-2" = "#6A0DAD", "STB-3" = "#4B0082"  ))
+```
+
+
+
+```{r stub}
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+summary(cars)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
