@@ -1,0 +1,187 @@
+---
+title: "Mouse uppercase"
+output: html_document
+date: "2025-04-02"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+# Load required libraries
+library(Seurat)
+library(SeuratObject)
+library(Matrix)
+library(patchwork) 
+
+
+# Set RNA as the default assay
+DefaultAssay(mouse) <- "RNA"
+
+# Extract the count matrix
+mouse_counts <- GetAssayData(mouse, slot = "counts")
+
+# Ensure data is a proper numeric matrix
+mouse_counts <- as.matrix(mouse_counts)
+
+# Check original gene names
+head(rownames(mouse_counts))
+
+### **Step 2: Convert Gene Names to Uppercase and Handle Duplicates**
+# Convert to uppercase and remove suffixes like ".1", ".2"
+new_mouse_gene_names <- toupper(gsub("\\.[0-9]+$", "", rownames(mouse_counts)))
+
+# Identify and handle duplicate gene names
+make_unique <- function(gene_names) {
+  gene_count <- table(gene_names)
+  gene_map <- gene_names
+  
+  for (gene in names(gene_count[gene_count > 1])) {
+    dup_indices <- which(gene_names == gene)
+    gene_map[dup_indices] <- paste0(gene, "_DUP", seq_along(dup_indices))
+  }
+  
+  return(gene_map)
+}
+
+# Apply uniqueness fix
+new_mouse_gene_names <- make_unique(new_mouse_gene_names)
+
+# Assign new uppercase, unique gene names
+rownames(mouse_counts) <- new_mouse_gene_names
+
+# Verify uppercase conversion
+sum(grepl("^[A-Z0-9]+$", rownames(mouse_counts)))  # Should match total genes
+sum(duplicated(rownames(mouse_counts)))  # Should be 0 (no duplicates)
+
+### **Step 3: Create a New Seurat Object**
+# Convert counts to sparse matrix to optimize memory
+mouse_counts_sparse <- as(mouse_counts, "dgCMatrix")
+
+# Create new Seurat object
+mouse_renamed <- CreateSeuratObject(counts = mouse_counts_sparse, assay = "RNA")
+
+# Normalize data to populate "data" layer
+mouse_renamed <- NormalizeData(mouse_renamed)
+
+# Verify renaming
+head(rownames(GetAssayData(mouse_renamed, slot = "data")))  # Should be uppercase and unique
+
+### **Step 4: Transfer UMAP, Clusters, and Metadata**
+# Verify cell names match
+all(colnames(mouse_renamed) %in% colnames(mouse))  # Should be TRUE
+all(colnames(mouse) %in% colnames(mouse_renamed))  # Should be TRUE
+
+# Transfer UMAP embeddings
+mouse_renamed[["umap"]] <- mouse[["umap"]]
+
+# Transfer cluster identities
+Idents(mouse_renamed) <- Idents(mouse)
+
+# Transfer cluster assignments
+mouse_renamed$seurat_clusters <- mouse$seurat_clusters
+
+# Transfer full metadata
+mouse_renamed@meta.data <- mouse@meta.data
+
+# Verify metadata transfer
+head(mouse_renamed@meta.data)
+
+### **Step 5: Verify Everything with UMAP**
+p1 <- DimPlot(mouse, reduction = "umap") + ggtitle("Original Mouse UMAP with Clusters")
+p2 <- DimPlot(mouse_renamed, reduction = "umap") + ggtitle("Renamed Mouse UMAP with Clusters")
+
+# Display both plots side by side
+p1 | p2
+
+```
+
+***Transfer alra data to uppercase mouse object****
+```{r}
+mouse_lower <- readRDS("GSE189103andGSE229514.rds")
+mouse_upper <- readRDS("mouse_renamed_uppercase_genes.rds")
+```
+
+```{r}
+# Start fresh from the original object
+mouse_upper <- mouse_lower
+
+# Convert gene names in RNA assay to uppercase
+rna_data <- GetAssayData(mouse_upper, assay = "RNA", layer = "data")
+rownames(rna_data) <- toupper(rownames(rna_data))
+mouse_upper[["RNA"]] <- CreateAssay5Object(data = list(data = rna_data))
+
+```
+
+```{r}
+# Get ALRA data from mouse_lower and convert gene names
+alra_data <- GetAssayData(mouse_lower, assay = "alra", layer = "data")
+rownames(alra_data) <- toupper(rownames(alra_data))
+
+# Create and add ALRA assay
+alra_assay <- CreateAssay5Object(data = list(data = alra_data))
+mouse_upper[["alra"]] <- alra_assay
+
+```
+
+```{r}
+# Should now show both assays
+names(mouse_upper@assays)
+
+# Set ALRA as the default
+DefaultAssay(mouse_upper) <- "alra"
+
+# Try a plot
+DotPlot(mouse_upper, features = "VIM")
+
+```
+
+```{r}
+mouse_lower <- readRDS("GSE189103andGSE229514.rds")
+mouse_upper <- readRDS("mouse_renamed_uppercase_genes.rds")
+# Step 1: Extract ALRA data from the original Seurat object
+alra_data <- GetAssayData(mouse_lower, assay = "alra", layer = "data")
+
+# Step 2: Convert gene names to uppercase to match mouse_upper
+rownames(alra_data) <- toupper(rownames(alra_data))
+
+# Step 3: Create a Seurat v5-compatible Assay object with a "data" layer
+alra_assay <- CreateAssay5Object(data = list(data = alra_data))
+
+# Step 4: Add the new ALRA assay to your Seurat object
+mouse_upper[["alra"]] <- alra_assay
+
+# Step 5: Confirm both assays are now present
+names(mouse_upper@assays)
+# Output should be: [1] "RNA" "alra"
+
+
+```
+
+```{r}
+saveRDS(mouse_upper, file = "Mouse_uppercase.rds")
+```
+
+```
+
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+summary(cars)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
