@@ -1,0 +1,1098 @@
+---
+title: "JfbTO_2.28,25"
+output: html_document
+date: "2025-02-28"
+---
+
+```{r setup, include=FALSE}
+library(Seurat) 
+library(BiocManager)
+library(remotes)
+library(devtools)
+library(viridisLite)
+library(RColorBrewer)
+library(harmony)
+library(viridis)
+library(ggplot2)
+library(slingshot)
+library(ggbeeswarm)
+library(ggthemes)
+library(DESeq2)
+library(scCustomize)
+library(tidyverse)
+library(ALRA)
+library(ComplexHeatmap)
+library(SeuratWrappers)
+```
+
+```{r}
+TO2.data <- Read10X(data.dir ="/Users/Jfb TO snRNASeq/JFB02/filtered_feature_bc_matrix")
+TO2 <- CreateSeuratObject(counts = TO2.data, project = "TO2", min.cells = 3, min.features = 200)
+TO3.data <- Read10X(data.dir ="/Users/Jfb TO snRNASeq/JFB03/filtered_feature_bc_matrix")
+TO3 <- CreateSeuratObject(counts = TO3.data, project = "TO3", min.cells = 3, min.features = 200)
+TO4.data <- Read10X(data.dir ="/Users/Jfb TO snRNASeq/JFB04/filtered_feature_bc_matrix")
+TO4 <- CreateSeuratObject(counts = TO4.data, project = "TO4", min.cells = 3, min.features = 200)
+TO6.data <- Read10X(data.dir ="/Users/Jfb TO snRNASeq/JFB06/filtered_feature_bc_matrix")
+TO6<- CreateSeuratObject(counts = TO6.data, project = "TO6", min.cells = 3, min.features = 200)
+```
+
+```{r}
+#MT genes
+# Define the mitochondrial gene list
+mito.genes <- c("ND5", "ND4", "ND3", "ND1", "ND2", "ND6", "ND4L", 
+                "CYTB", "COX2", "ATP8", "ATP6", "COX3", "COX1")
+
+```
+
+```{r}
+TO2[["percent.mt.custom"]] <- PercentageFeatureSet(TO2, features = mito.genes)
+TO2[["percent.rb"]] <- PercentageFeatureSet(TO2, pattern = "^RP[SL]")
+TO3[["percent.mt.custom"]] <- PercentageFeatureSet(TO3, features = mito.genes)
+TO3[["percent.rb"]] <- PercentageFeatureSet(TO3, pattern = "^RP[SL]")
+TO4[["percent.mt.custom"]] <- PercentageFeatureSet(TO4, features = mito.genes)
+TO4[["percent.rb"]] <- PercentageFeatureSet(TO4, pattern = "^RP[SL]")
+TO6[["percent.mt.custom"]] <- PercentageFeatureSet(TO6, features = mito.genes)
+TO6[["percent.rb"]] <- PercentageFeatureSet(TO6, pattern = "^RP[SL]")
+```
+
+
+```{r}
+VlnPlot(
+    object = TO2,
+    features = c("nCount_RNA", "nFeature_RNA", "percent.mt.custom", "percent.rb"),
+    ncol = 4,
+    pt.size = 0.5)
+
+VlnPlot(
+    object = TO3,
+    features = c("nCount_RNA", "nFeature_RNA", "percent.mt.custom", "percent.rb"),
+    ncol = 4,
+    pt.size = 0.5)
+
+VlnPlot(
+    object = TO4,
+    features = c("nCount_RNA", "nFeature_RNA", "percent.mt.custom", "percent.rb"),
+    ncol = 4,
+    pt.size = 0.5)
+
+VlnPlot(
+    object = TO6,
+    features = c("nCount_RNA", "nFeature_RNA", "percent.mt.custom", "percent.rb"),
+    ncol = 4,
+    pt.size = 0.5)
+```
+
+```{r}
+subset(
+     TO2,
+     nFeature_RNA>300 & 
+         nFeature_RNA < 7500 & nCount_RNA<20000 & percent.rb<8 & percent.mt.custom<0.8)-> TO2.QC
+
+subset(
+     TO3,
+     nFeature_RNA>300 & 
+         nFeature_RNA < 8000 & nCount_RNA<40000 & percent.rb<8 & percent.mt.custom<0.8)-> TO3.QC
+
+subset(
+     TO4,
+     nFeature_RNA>300 & 
+         nFeature_RNA < 9000 & nCount_RNA<40000 & percent.rb<5 & percent.mt.custom<0.5)-> TO4.QC
+
+subset(
+     TO6,
+     nFeature_RNA>300 & 
+         nFeature_RNA < 8000 & nCount_RNA<40000 & percent.rb<8 & percent.mt.custom<0.5)-> TO6.QC
+```
+
+```{r}
+VlnPlot(
+    object = TO2.QC,
+    features = c("nCount_RNA", "nFeature_RNA", "percent.mt.custom", "percent.rb"),
+    ncol = 4,
+    pt.size = 0.5)
+
+VlnPlot(
+    object = TO3.QC,
+    features = c("nCount_RNA", "nFeature_RNA", "percent.mt.custom", "percent.rb"),
+    ncol = 4,
+    pt.size = 0.5)
+
+VlnPlot(
+    object = TO4.QC,
+    features = c("nCount_RNA", "nFeature_RNA", "percent.mt.custom", "percent.rb"),
+    ncol = 4,
+    pt.size = 0.5)
+
+VlnPlot(
+    object = TO6.QC,
+    features = c("nCount_RNA", "nFeature_RNA", "percent.mt.custom", "percent.rb"),
+    ncol = 4,
+    pt.size = 0.5)
+```
+
+```{r}
+dim(TO2)
+dim(TO2.QC)
+dim(TO3)
+dim(TO3.QC)
+dim(TO4)
+dim(TO4.QC)
+dim(TO6)
+dim(TO6.QC)
+```
+
+```{r}
+TO.QC <- merge(TO2.QC, y = c(TO3.QC, TO4.QC, TO6.QC), project = "Jfb TOs")
+```
+
+
+```{r}
+TO.join <-JoinLayers(TO.QC) 
+TO.split <- split(TO.join, f = TO.join$orig.ident)
+options(future.globals.maxSize = 3 * 1024^3)  # Increases limit to 3GB
+TO.SCT <-SCTransform(TO.split, vars.to.regress = c('nFeature_RNA', 'nCount_RNA', 'percent.rb', 'percent.mt.custom'), verbose = TRUE)
+TO.SCT <- RunPCA(TO.SCT, verbose=T)
+ElbowPlot(TO.SCT, reduction = "pca", ndims = 50)
+```
+
+```{r}
+TO.SCT <- FindNeighbors(TO.SCT, dims = 1:30, reduction = "pca")
+TO.SCT <- FindClusters(TO.SCT, resolution = 0.2, cluster.name = "unintegrated_clusters")
+TO.SCT <- RunUMAP(TO.SCT, dims = 1:30, reduction = "pca", reduction.name = "umap.unintegrated")
+```
+
+
+```{r}
+DimPlot(TO.SCT, reduction = "umap.unintegrated", raster=TRUE, pt.size=2)
+DimPlot(TO.SCT, reduction = "umap.unintegrated", split.by = "orig.ident", raster=TRUE, pt.size=2, label=T)
+```
+
+#CCA integration
+```{r}
+table(TO.SCT$orig.ident)  # Check if multiple samples exist
+TO.SCT$layers <- TO.SCT$orig.ident
+Layers(TO.SCT)
+
+ TO.cca <- IntegrateLayers(
+     object = TO.SCT, 
+     method = CCAIntegration,  
+     orig.reduction = "pca", 
+     new.reduction = "integrated.cca",
+     normalization.method = "SCT",  
+     verbose = TRUE)
+ 
+```
+
+
+```{r}
+TO.cca <- FindNeighbors(TO.cca, reduction = "integrated.cca", dims = 1:30)
+TO.cca<- FindClusters(TO.cca, resolution = 0.2, cluster.name = "cca_clusters")
+TO.cca <- RunUMAP(TO.cca, reduction = "integrated.cca", dims = 1:30, reduction.name = "umap.cca")
+```
+
+```{r}
+DimPlot(
+    TO.cca,    reduction = "umap.cca",
+     group.by = c("orig.ident", "cca_clusters",
+     combine = FALSE), pt.size=1.5, raster=TRUE)
+```
+
+```{r}
+DefaultAssay(TO.cca) <- "RNA"
+TO.cca<-NormalizeData(TO.cca)
+TO.cca<-ScaleData(TO.cca)
+```
+
+```{r}
+TO.cca.join <-JoinLayers(TO.cca)
+```
+
+
+```{r}
+DefaultAssay(TO.cca.join) <- "SCT"
+TO.CCA.alra <- RunALRA(TO.cca.join, setDelfaultAssay=FALSE, verbose=TRUE)
+saveRDS(TO.CCS.alra, file = "Bat_TOs.cca.ALRA_4.7.25.rds")
+```
+
+
+```{r}
+TO.cca <- readRDS("/Users/Bat_TOs.cca.rds")
+```
+
+
+***Slingshot***
+```{r}
+DefaultAssay(TO.cca.join)  <- "SCT"
+Trophs.sce <- as.SingleCellExperiment(TO.cca.join)
+```
+
+```{r}
+Traj1.scecl <- slingshot(Trophs.sce, 
+                         clusterLabels = 'ident', 
+                         reducedDim = "UMAP.CCA", 
+                         start.clus = "TB-p1",  # Set starting cluster
+                         allow.breaks = FALSE)
+
+```
+
+
+```{r}
+slo <- SlingshotDataSet(Traj1.scecl)
+slo
+```
+
+```{r}
+Curves <- slingCurves(Traj1.scecl)
+Curve1XY <- data.frame(X = Curves$Lineage1$s[,1], Y = Curves$Lineage1$s[,2])
+Curve2XY <- data.frame(X = Curves$Lineage2$s[,1], Y = Curves$Lineage2$s[,2])
+Curve3XY <- data.frame(X = Curves$Lineage3$s[,1], Y = Curves$Lineage3$s[,2])
+Curve4XY <- data.frame(X = Curves$Lineage4$s[,1], Y = Curves$Lineage4$s[,2])
+
+# Extract Pseudotime Values
+TO.cca$pseudotime1 <- Traj1.scecl$slingPseudotime_1
+TO.cca$pseudotime2 <- Traj1.scecl$slingPseudotime_2
+TO.cca$pseudotime3 <- Traj1.scecl$slingPseudotime_3
+TO.cca$pseudotime4 <- Traj1.scecl$slingPseudotime_4
+```
+
+```{r}
+library(scales)
+
+# Rescale each pseudotime to 0-100, ensuring NA values are kept
+TO.cca$pseudotime1 <- ifelse(is.na(TO.cca$pseudotime1), NA, rescale(TO.cca$pseudotime1, to = c(0, 100)))
+TO.cca$pseudotime2 <- ifelse(is.na(TO.cca$pseudotime2), NA, rescale(TO.cca$pseudotime2, to = c(0, 100)))
+TO.cca$pseudotime3 <- ifelse(is.na(TO.cca$pseudotime3), NA, rescale(TO.cca$pseudotime3, to = c(0, 100)))
+TO.cca$pseudotime4 <- ifelse(is.na(TO.cca$pseudotime4), NA, rescale(TO.cca$pseudotime4, to = c(0, 100)))
+
+# Verify new ranges
+summary(TO.cca$pseudotime1)
+summary(TO.cca$pseudotime2)
+summary(TO.cca$pseudotime3)
+summary(TO.cca$pseudotime4)
+```
+
+```{r}
+library(ggplot2)
+library(tidyr)
+library(dplyr)
+
+# Extract UMAP coordinates
+umap_coords <- Embeddings(TO.cca, "umap.cca")
+
+# Create a dataframe combining UMAP and pseudotimes
+df <- data.frame(
+  Cell = rownames(umap_coords),
+  UMAP1 = umap_coords[,1],
+  UMAP2 = umap_coords[,2],
+  pseudotime1 = TO.cca$pseudotime1,
+  pseudotime2 = TO.cca$pseudotime2,
+  pseudotime3 = TO.cca$pseudotime3,
+  pseudotime4 = TO.cca$pseudotime4
+)
+
+# Convert to long format for facetting
+df_long <- pivot_longer(df, cols = starts_with("pseudotime"), 
+                        names_to = "PseudotimeType", values_to = "Pseudotime")
+
+# Ensure NA values remain NA for proper grey coloring
+df_long$Pseudotime[df_long$Pseudotime == 0] <- NA
+
+
+```
+
+```{r}
+# Assign each curve its corresponding pseudotime label
+Curve1XY$PseudotimeType <- "pseudotime1"
+Curve2XY$PseudotimeType <- "pseudotime2"
+Curve3XY$PseudotimeType <- "pseudotime3"
+Curve4XY$PseudotimeType <- "pseudotime4"
+
+# Combine all curves into one dataframe
+curve_data <- bind_rows(Curve1XY, Curve2XY, Curve3XY, Curve4XY)
+
+
+```
+
+```{r}
+library(grid)
+library(ggplot2)
+
+ggplot() + 
+    # Scatter plot for UMAP with pseudotime coloring
+    geom_point(data = df_long, aes(x = UMAP1, y = UMAP2, color = Pseudotime), size = 1, na.rm = FALSE) +  
+    scale_color_gradientn(colors = c("#5E4FA2", "#3288BD", "#66C2A5", "#ABDDA4", "#E6F598", 
+                                     "#FEE08B", "#FDAE61", "#F46D43", "#D53E4F", "#9E0142"),
+                          limits = c(0, 100), 
+                          na.value = "grey80") +  # Force NA values to grey
+    # Add trajectory curves with arrowheads at the end
+    geom_path(data = curve_data, aes(x = X, y = Y, group = PseudotimeType), 
+              size = 1, linetype = "dashed", color = "black",
+              arrow = arrow(type = "closed", length = unit(0.2, "inches"))) +  # Arrow at end of lines
+    facet_wrap(~PseudotimeType) +  # Facet by pseudotime type
+    theme_minimal(base_size = 16) +
+    theme(panel.grid = element_blank(),
+          axis.ticks = element_blank(),
+          legend.key = element_blank(),
+          plot.background = element_blank(),
+          axis.line = element_line(size = 1, color = "black"),
+          text = element_text(size = 18)) +
+    ggtitle("Pseudotime Trajectories")
+
+```
+
+
+***Plot terminal cells***
+
+```{r}
+Percentile <- 0.9
+TO.cca$termini <- "Other"
+TO.cca$termini[TO.cca$pseudotime1 > quantile(TO.cca$pseudotime1, probs = Percentile, na.rm = T)] <- "Terminus 1"
+TO.cca$termini[TO.cca$pseudotime2 > quantile(TO.cca$pseudotime2, probs = Percentile, na.rm = T)] <- "Terminus 2"
+TO.cca$termini[TO.cca$pseudotime3 > quantile(TO.cca$pseudotime3, probs = Percentile, na.rm = T)] <- "Terminus 3"
+TO.cca$termini[TO.cca$pseudotime4 > quantile(TO.cca$pseudotime4, probs = Percentile, na.rm = T)] <- "Terminus 4"
+```
+
+```{r}
+p1<-DimPlot(TO.cca, group.by = "termini", cols=c("grey80", "#D7263D", "grey80", "grey80", "grey80"),reduction = "umap.cca", pt.size=0.75)
+p2<-DimPlot(TO.cca, group.by = "termini", cols=c("grey80", "grey80", "#D7263D", "grey80", "grey80"),reduction = "umap.cca", pt.size=0.75)
+p3<-DimPlot(TO.cca, group.by = "termini", cols=c("grey80", "grey80", "grey80", "#D7263D", "grey80"),reduction = "umap.cca", pt.size=0.75)
+p4<-DimPlot(TO.cca, group.by = "termini", cols=c("grey80", "grey80", "grey80", "grey80", "#D7263D"),reduction = "umap.cca", pt.size=0.75)
+(p1 | p2) / (p3 | p4)
+```
+
+
+```{r}
+DefaultAssay(TO.cca.join)  <- "RNA"
+TOmarkers_terminus1 <- FindMarkers(TO.cca.join, ident.1 = "Terminus 1", ident.2 = "Other", group.by = "termini")
+TOmarkers_terminus2 <- FindMarkers(TO.cca.join, ident.1 = "Terminus 2", ident.2 = "Other", group.by = "termini")
+TOmarkers_terminus3 <- FindMarkers(TO.cca.join, ident.1 = "Terminus 3", ident.2 = "Other", group.by = "termini")
+TOmarkers_terminus4 <- FindMarkers(TO.cca.join, ident.1 = "Terminus 4", ident.2 = "Other", group.by = "termini")
+```
+
+```{r}
+write.csv(TOmarkers_terminus1, file="TOmarkers_terminus1.csv")
+write.csv(TOmarkers_terminus2, file="TOmarkers_terminus2.csv")
+write.csv(TOmarkers_terminus3, file="TOmarkers_terminus3.csv")
+write.csv(TOmarkers_terminus4, file="TOmarkers_terminus4.csv")
+```
+
+
+```{r}
+library(dplyr)
+
+top_n <- 10  # number of genes per terminus
+
+top1 <- TOmarkers_terminus1 %>% 
+  arrange(desc(avg_log2FC)) %>% 
+  head(top_n) %>% 
+  rownames()
+
+top2 <- TOmarkers_terminus2 %>% 
+  arrange(desc(avg_log2FC)) %>% 
+  head(top_n) %>% 
+  rownames()
+
+top3 <- TOmarkers_terminus3 %>% 
+  arrange(desc(avg_log2FC)) %>% 
+  head(top_n) %>% 
+  rownames()
+
+top4 <- TOmarkers_terminus4 %>% 
+  arrange(desc(avg_log2FC)) %>% 
+  head(top_n) %>% 
+  rownames()
+
+# Combine and deduplicate
+top_genes <- unique(c(top1, top2, top3, top4))
+
+```
+
+```{r}
+Idents(TO.cca.join) <- "termini"
+```
+
+```{r}
+DotPlot(TO.cca.join, features = top_genes, dot.scale = 7, col.min = 0, col.max = 2, scale = TRUE) +
+    ggtitle("Top Marker Genes by Terminal State") +
+    theme(axis.text.y = element_text(size = 8)) +
+    coord_flip()
+
+```
+
+
+```{r}
+ident_colors <- c(
+    # Progenitor trophoblasts
+    "TB-p1"  = "#FFE135",  # Banana Yellow
+    "TB-p2"  = "#FFD700",  # Golden Yellow
+    "TB-p3"  = "#FFB347",  # Light Orange
+    
+    # Transitional trophoblasts
+    "tTB-1"  = "#FF7F50",  # Coral
+    "tTB-2"  = "#FF4500",  # Orange-Red
+    "tTB-3"  = "#D73027",  # Deep Red
+    
+    # Mature trophoblast
+    "mTB"    = "#8B4513",  # Saddle Brown
+    
+    # Invasive trophoblasts
+    "iTB-1"  = "#1B9E77",  # Teal Green
+    "iTB-2"  = "#66C2A5",  # Minty Teal
+    
+    # Syncytial trophoblasts (purple reserved)
+    "sTB-1"  = "#A020F0",  # Royal Purple
+    "sTB-2"  = "#6A0DAD"   # Indigo
+)
+
+
+```
+
+```{r}
+DimPlot(TO.cca, reduction = "umap.cca", label = TRUE, repel = TRUE, cols = ident_colors, pt.size=0.25, label.size = 6)
+```
+
+
+```{r}
+trophoblast__markers <- c(
+    # Proliferation / cell cycle markers
+    "MKI67",   # Ki-67, canonical proliferation marker
+    "TOP2A",   # DNA topoisomerase, G2/M
+    "BIRC5",   # Survivin, anti-apoptotic and proliferation marker
+    "CDK1",    # Cyclin-dependent kinase 1
+    "TEAD4",   # Key for early trophoblast fate
+    "MSX2",     # Marker of progenitor-like trophoblast states (mouse/human)
+    "NOTCH2", "NOTCH3", "JAG1", "PTEN", "MAML2",  
+    "ITGA1",    # Integrin alpha-1 — associated with EVT matrix interactions
+    "KRT18", "MAL2", "HOPX",
+     "THRB"
+)
+
+# Notch signaling genes
+notch_genes <- c(
+    "NOTCH1", "NOTCH2", "NOTCH3", "NOTCH4",       # Receptors
+    "DLL1", "DLL3", "DLL4", "JAG1", "JAG2",       # Ligands
+    "MAML1", "MAML2", "MAML3",                    # Coactivators
+    "RBPJ", "HES1", "HES5", "HEY1", "HEY2", "NRARP" # Target genes
+)
+
+# EMT (epithelial-mesenchymal transition) genes
+emt_genes <- c(
+    "CDH1", "CDH2", "VIM", "FN1",                 # E-cadherin, N-cadherin, vimentin, fibronectin
+    "SNAI1", "SNAI2", "ZEB1", "ZEB2", "TWIST1", "TWIST2", # EMT transcription factors
+    "TGFBR1", "TGFBR2", "TGFB1",                  # TGF-beta signaling
+    "MMP2", "MMP9",                               # Matrix metalloproteinases
+    "CLDN1", "CLDN7", "OCLN",                     # Tight junction proteins
+    "ITGB1", "ITGA5",                             # Integrins
+    "EGFR", "AXL", "SPARC"                        # Other EMT-associated genes
+)
+```
+
+***Probabalistic modeling***
+```{r}
+#Import TissueTrophs analyzed file
+DefaultAssay(Trophs)  <- "RNA"
+Tissue.join <-JoinLayers(Trophs)
+```
+
+
+```{r}
+Tissue.join$cell_type <- Idents(Tissue.join)
+umap_cca_original <- TO.cca@reductions$umap.cca
+head(Embeddings(TO.cca, reduction = "umap.cca"))
+```
+
+```{r}
+Tissue.join <- FindVariableFeatures(Tissue.join)
+DefaultAssay(TO.cca)  <- "RNA"
+TO.cca.join <-JoinLayers(TO.cca)
+TO.cca.join <- FindVariableFeatures(TO.cca.join)
+```
+
+```{r}
+shared.features <- intersect(
+     VariableFeatures(Tissue.join),
+     VariableFeatures(TO.cca.join)
+ )
+```
+
+```{r}
+length(shared.features)  # Sanity check that it's non-zero
+
+```
+
+```{r}
+anchors <- FindTransferAnchors(
+     reference = Tissue.join,
+     query = TO.cca.join,
+     normalization.method = "LogNormalize",
+     dims = 1:30,
+     features = shared.features
+ )
+```
+
+```{r}
+predictions <- TransferData(
+     anchorset = anchors,
+     refdata = Tissue.join$cell_type,  # Use correct cell type column
+     dims = 1:30
+ )
+```
+
+```{r}
+TO.cca.join$predicted.id <- predictions$predicted.id
+```
+
+
+```{r}
+DimPlot(TO.cca.join, reduction = "umap.cca", group.by = "predicted.id", label = TRUE, repel = TRUE, cols = colors, pt.size=1.5)
+```
+
+**markers that drove id***
+
+```{r}
+Idents(TO.harm.join) <- TO.harm.join$predicted.id
+
+# Find marker genes for predicted identities in the query dataset
+markers <- FindAllMarkers(
+  TO.harm.join,
+  assay = "RNA",
+  only.pos = TRUE,
+  logfc.threshold = 0.25,
+  min.pct = 0.1
+)
+
+```
+
+```{r}
+write.csv(markers, file="TO probabalistic modeling.markers.csv")
+```
+
+***GO analysis***
+
+```{r}
+Bat_TO.markers.cca <- FindAllMarkers(object = TO.cca.join, assay = "RNA", thresh.use = 0.25, min.pct = 0.25, only.pos = TRUE)
+```
+
+
+```{r}
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(dplyr)
+library(ggplot2)
+
+# 1. Perform GO enrichment per cluster
+trophs_go_results <- lapply(unique(Bat_TO.markers.cca$cluster), function(cluster) {
+    genes <- Bat_TO.markers.cca %>%
+        filter(cluster == !!cluster) %>%
+        pull(gene)
+
+    ego_result <- enrichGO(
+        gene          = genes,
+        OrgDb         = org.Hs.eg.db,
+        keyType       = "SYMBOL",
+        ont           = "MF",  # Change to "BP" or "CC" if preferred
+        pAdjustMethod = "BH",
+        pvalueCutoff  = 0.05,
+        qvalueCutoff  = 0.05
+    )
+
+    return(ego_result)
+})
+names(trophs_go_results) <- unique(Bat_TO.markers.cca$cluster)
+
+# 2. Extract and combine results into a dataframe
+extract_go_results <- function(go_list) {
+    combined_results <- lapply(names(go_list), function(cluster) {
+        enrich_result <- go_list[[cluster]]
+        if (!is.null(enrich_result) && nrow(enrich_result@result) > 0) {
+            df <- as.data.frame(enrich_result@result)
+            df$Cluster <- cluster
+            return(df)
+        } else {
+            return(NULL)
+        }
+    })
+
+    combined_results <- combined_results[!sapply(combined_results, is.null)]
+
+    if (length(combined_results) > 0) {
+        combined_results <- do.call(rbind, combined_results)
+    } else {
+        combined_results <- data.frame()
+    }
+
+    return(combined_results)
+}
+
+# 3. Extract and keep top 5 pathways per cluster
+combined_go_results <- extract_go_results(trophs_go_results)
+
+top5_per_cluster <- combined_go_results %>%
+    group_by(Cluster) %>%
+    slice_min(order_by = p.adjust, n = 5) %>%
+    ungroup()
+
+# 4. Arrange for plotting
+unique_pathways <- top5_per_cluster %>%
+    arrange(Cluster, p.adjust) %>%
+    mutate(Description = factor(Description, levels = unique(Description)))
+
+```
+
+
+
+```{r}
+unique_pathways <- unique_pathways %>%
+    mutate(
+        Cluster = factor(Cluster, levels = c("TB-p1", "TB-p2", "TB-p3", "tTB-1", "tTB-2", "tTB-3", "mTB", "iTB-1", "iTB-2", "sTB-1", "sTB-2")),
+        Description = fct_reorder2(Description, Cluster, -log10(p.adjust))
+    )
+```
+
+```{r}
+library(ggplot2)
+library(viridis)
+
+ggplot(unique_pathways, aes(x = Cluster, y = Description)) +
+    geom_point(aes(size = Count, fill = -log10(p.adjust)),
+               shape = 21, color = "black", stroke = 0.4) +
+    scale_fill_viridis_c(
+        option = "viridis",    # This is the default viridis palette
+        direction = 1,
+        name = "-log10(adj p-value)"
+    ) +
+    scale_size_continuous(range = c(2, 7)) +
+    theme_minimal(base_size = 11) +
+    theme(
+        panel.background = element_rect(fill = "grey98", color = NA),
+        panel.grid.major = element_line(color = "grey80", linewidth = 0.3),
+        panel.grid.minor = element_blank(),
+        panel.border = element_rect(color = "black", fill = NA, size = 0.6),
+        axis.text.y = element_text(size = 9),
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 9),
+        legend.position = "right"
+    ) +
+    labs(
+        title = "Top 5 Enriched GO Molecular Function Terms per Cluster",
+        x = "Cluster",
+        y = "GO Term",
+        fill = "-log10(adj p-value)",
+        size = "Gene Count"
+    )
+
+```
+
+
+```{r}
+library(ggplot2)
+library(forcats)
+
+# Optional: Reorder terms by p-value or count within each cluster
+unique_pathways$Description <- fct_reorder(unique_pathways$Description, unique_pathways$Count)
+
+ggplot(unique_pathways, aes(x = Description, y = Cluster)) +
+    geom_point(aes(size = Count, fill = Cluster), shape = 21, color = "black", stroke = 0.4) +
+    scale_fill_manual(values = ident_colors) +
+    scale_size_continuous(range = c(2, 6), name = "Gene Count") +
+    theme_minimal(base_size = 10) +
+    theme(
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 8),
+        axis.text.y = element_text(size = 9),
+        panel.background = element_rect(fill = "white", color = NA),
+        panel.grid.major.x = element_line(color = "grey80", linewidth = 0.3),
+        panel.grid.major.y = element_blank(),
+        panel.border = element_rect(color = "black", fill = NA, size = 0.5),
+        legend.position = "top",
+        legend.box = "horizontal",
+        plot.margin = margin(5, 5, 5, 5)
+    ) +
+    labs(
+        x = "GO Term",
+        y = "Cluster",
+        fill = "Cluster",
+        title = "Top Enriched GO Molecular Function Terms by Cluster"
+    )
+```
+
+```{r}
+library(forcats)
+
+# Add a column for significance
+unique_pathways$neg_log_p <- -log10(unique_pathways$p.adjust)
+
+# Reorder Description within Cluster by significance
+unique_pathways$Description <- fct_reorder2(
+  unique_pathways$Description,
+  unique_pathways$Cluster,
+  unique_pathways$neg_log_p
+)
+
+```
+
+```{r}
+library(stringr)
+
+unique_pathways$WrappedDescription <- str_wrap(as.character(unique_pathways$Description), width = 30)
+
+
+
+```
+
+```{r}
+
+library(stringr)
+
+# Ensure Description is character, then truncate
+unique_pathways$ShortDescription <- str_trunc(as.character(unique_pathways$Description), width = 50)
+
+ggplot(unique_pathways, aes(x = ShortDescription, y = Cluster)) +  
+    geom_point(aes(size = Count, fill = Cluster),
+               shape = 21, color = "black", stroke = 0.4) +
+    scale_fill_manual(values = ident_colors, name = "Cluster") +
+    scale_size_continuous(range = c(2, 6), name = "Gene Count") +
+    theme_minimal(base_size = 10) +
+    theme(
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 8),
+        axis.text.y = element_text(size = 9),
+        panel.background = element_rect(fill = "white", color = NA),
+        panel.grid.major.x = element_line(color = "grey80", linewidth = 0.3),
+        panel.grid.major.y = element_blank(),
+        panel.border = element_rect(color = "black", fill = NA, size = 0.5),
+        legend.position = "top",
+        legend.box = "horizontal",
+        plot.margin = margin(5, 5, 5, 5)
+    ) +
+    labs(
+        title = "Top Enriched GO Molecular Function Terms by Cluster",
+        subtitle = "GO terms ordered by significance (-log10 adjusted p-value)",
+        x = "GO Term",
+        y = "Cluster"
+    )
+```
+
+```{r}
+# If needed, select the columns you want to include
+export_df <- unique_pathways %>%
+  dplyr::select(Cluster, Description, p.adjust, Count)
+
+# Save to CSV
+write.csv(export_df, "cluster_pathways.csv", row.names = FALSE)
+
+```
+
+
+```{r}
+library(pheatmap)
+library(viridis)
+library(tibble)
+
+# 1. Convert to matrix for plotting
+heatmap_mat <- heatmap_df %>%
+    column_to_rownames("Description") %>%
+    as.matrix()
+
+# 2. Optionally reorder (for better visual grouping)
+heatmap_mat <- heatmap_mat[order(rowSums(heatmap_mat), decreasing = TRUE), ]
+heatmap_mat <- heatmap_mat[, order(colnames(heatmap_mat))]
+
+
+pheatmap(
+    heatmap_mat,
+    color = viridis(100, option = "D", direction = -1),  # visually clean, colorblind-friendly
+    cluster_rows = TRUE,
+    cluster_cols = TRUE,
+    fontsize = 10,
+    cellwidth = 30,
+    cellheight = 12,
+    border_color = "white",
+    main = "Top GO:MF Pathways Across Trophoblast Clusters",
+    display_numbers = TRUE,
+    number_format = "%.1f",
+    fontsize_number = 8
+)
+
+dev.off()
+```
+
+***all clusters****
+```{r}
+library(pheatmap)
+library(viridis)
+library(scales)
+library(dplyr)
+library(tibble)
+
+# 1. Build heatmap matrix from all clusters
+heatmap_mat_all <- heatmap_df %>%
+  column_to_rownames("Description") %>%
+  as.matrix()
+
+# Optional: reorder for clarity
+heatmap_mat_all <- heatmap_mat_all[, order(colnames(heatmap_mat_all))]
+heatmap_mat_all <- heatmap_mat_all[order(rowSums(heatmap_mat_all), decreasing = TRUE), ]
+
+# 2. Create custom color palette: white for 0, viridis for enrichment
+palette_length <- 100
+viridis_colors <- viridis(palette_length - 1, option = "D", direction = -1)
+custom_colors <- c("white", viridis_colors)
+
+# Set color breaks with 0 mapping to white
+max_val <- ceiling(max(heatmap_mat_all))
+breaks <- c(0, seq(0.01, max_val, length.out = palette_length))
+
+
+pheatmap(
+  heatmap_mat_all,
+  color = custom_colors,
+  breaks = breaks,
+  cluster_rows = TRUE,
+  cluster_cols = TRUE,
+  fontsize = 10,
+  cellwidth = 30,
+  cellheight = 12,
+  border_color = "grey",
+  main = "GO:MF Pathways Across All Organoid Trophoblast Clusters",
+  display_numbers = TRUE,
+  number_format = "%.1f",
+  fontsize_number = 8
+)
+```
+
+
+```{r}
+pheatmap(
+  heatmap_mat_all,
+  color = custom_colors,
+  breaks = breaks,
+  cluster_rows = TRUE,
+  cluster_cols = TRUE,
+  fontsize = 10,
+  cellwidth = 30,
+  cellheight = 12,
+  border_color = "grey",
+  main = "GO:MF Pathways Across All Organoid Trophoblast Clusters",
+  display_numbers = TRUE,
+  number_format = "%.1f",
+  fontsize_number = 8,
+  angle_col = 45  # 🔥 this slants the x-axis labels!
+)
+```
+
+
+```{r}
+dev.off()
+
+```
+
+***final
+```{r}
+p1<-pheatmap(
+    t(heatmap_mat_all),  # Transpose to flip axes
+    color = custom_colors,
+    breaks = breaks,
+    cluster_rows = TRUE,
+    cluster_cols = TRUE,
+    fontsize = 9,
+    cellwidth = 12,
+    cellheight = 10,
+    border_color = "grey70",
+    main = "GO:MF Pathways Across All Organoid Trophoblast Clusters (Rotated)",
+    display_numbers = FALSE,       # ❌ removes numbers inside boxes
+    angle_col = 45                 # slant new x-axis (now GO terms)
+)
+
+```
+
+
+```{r}
+Heatmap(heatmap_mat_all,
+        col = colorRamp2(c(0, 1, 5), c("white", "lightblue", "darkblue")),
+        heatmap_legend_param = list(
+            title = "-log10(adj. p)",
+            at = c(0, 1, 2, 3, 5),
+            labels = c("0 (white)", "1", "2", "3", "5+")
+        )
+)
+
+```
+
+***Final***
+
+```{r}
+ht <- Heatmap(
+    heatmap_mat,
+    name = "-log10(p.adj)",
+    col = col_fun,
+    cluster_rows = TRUE,
+    cluster_columns = TRUE,
+    row_names_side = "left",
+    column_names_side = "bottom",
+    column_names_rot = 45,
+    show_heatmap_legend = TRUE,
+    border = TRUE,
+    row_names_gp = gpar(fontsize = 11),        # row labels (GO terms)
+    column_names_gp = gpar(fontsize = 12),     # column labels (clusters)
+    heatmap_legend_param = list(
+        at = c(0, 1, 3, 5, max_val),
+        labels = c("0 (not enriched)", "1", "3", "5", paste0(max_val, "+")),
+        title = "-log10(adj. p)",
+        title_gp = gpar(fontsize = 9),          # legend title font size
+        labels_gp = gpar(fontsize = 8)          # legend tick label font size
+    )
+)
+```
+
+***Final TO pathway from chat***
+
+```{r}
+# Load libraries
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(dplyr)
+library(tidyr)
+library(tibble)
+library(ComplexHeatmap)
+library(circlize)
+library(viridis)
+
+# STEP 1: Perform GO:MF enrichment per cluster
+trophs_go_results <- lapply(unique(Bat_TO.markers.cca$cluster), function(cluster) {
+  genes <- Bat_TO.markers.cca %>%
+    filter(cluster == !!cluster) %>%
+    pull(gene)
+
+  enrichGO(
+    gene          = genes,
+    OrgDb         = org.Hs.eg.db,
+    keyType       = "SYMBOL",
+    ont           = "MF",
+    pAdjustMethod = "BH",
+    pvalueCutoff  = 0.05,
+    qvalueCutoff  = 0.05
+  )
+})
+names(trophs_go_results) <- unique(Bat_TO.markers.cca$cluster)
+
+# STEP 2: Extract combined results
+trophs_go_combined <- lapply(names(trophs_go_results), function(cluster) {
+  result <- trophs_go_results[[cluster]]
+  if (!is.null(result) && nrow(result@result) > 0) {
+    df <- as.data.frame(result@result)
+    df$Cluster <- cluster
+    return(df)
+  } else {
+    return(NULL)
+  }
+})
+trophs_go_combined <- do.call(rbind, trophs_go_combined)
+
+# STEP 3: Filter to top 5 per cluster
+top5_per_cluster <- trophs_go_combined %>%
+  group_by(Cluster) %>%
+  slice_min(order_by = p.adjust, n = 5) %>%
+  ungroup()
+
+# STEP 4: Create heatmap matrix of -log10(p.adjust)
+heatmap_df <- top5_per_cluster %>%
+  mutate(log_padj = -log10(p.adjust)) %>%
+  dplyr::select(Description, Cluster, log_padj) %>%
+  pivot_wider(names_from = Cluster, values_from = log_padj, values_fill = 0)
+
+heatmap_mat <- heatmap_df %>%
+  column_to_rownames("Description") %>%
+  as.matrix()
+
+# STEP 5: Flip axes so clusters = rows, pathways = columns
+heatmap_mat_flipped <- t(heatmap_mat)
+
+# STEP 6: Define custom blue color scale (white = 0)
+max_val <- ceiling(max(heatmap_mat_flipped))
+col_fun <- colorRamp2(
+  c(0, 0.01, max_val),
+  c("white", "#A6CEE3", "#08306B")
+)
+
+# STEP 7: Generate heatmap
+p2 <- Heatmap(
+  heatmap_mat_flipped,
+  name = "-log10(p.adj)",
+  col = col_fun,
+  cluster_rows = TRUE,
+  cluster_columns = TRUE,
+  row_names_side = "left",
+  column_names_side = "bottom",
+  column_names_rot = 45,
+  row_names_gp = gpar(fontsize = 13),
+  column_names_gp = gpar(fontsize = 11),
+  heatmap_legend_param = list(
+    at = c(0, 1, 3, 5, max_val),
+    labels = c("0 (not enriched)", "1", "3", "5", paste0(max_val, "+")),
+    title = "-log10(adj. p)",
+    title_gp = gpar(fontsize = 9),
+    labels_gp = gpar(fontsize = 10)
+  ),
+  border = TRUE
+)
+```
+
+
+```{r}
+
+ggsave("GOenrich_Dotplot.TO.pdf", plot = p2, width = 13, height = 5.5, units = "in")
+```
+
+
+
+```{r}
+# List of key genes involved in enriched GO terms (customize based on  top pathways)
+genes_of_interest <- c("KRT18", "HOPX", "TEAD4", "MSX2", "MKI67", "BUB1B", "S100A10", "ITGA6")
+
+# Plot dot plot from Seurat object
+DotPlot(seurat_obj, features = genes_of_interest, group.by = "seurat_clusters") +
+  RotatedAxis() +
+  scale_color_gradient(low = "lightgrey", high = "darkblue") +
+  theme_minimal() +
+  labs(x = "Gene", y = "Trophoblast State", color = "Average Expression")
+
+```
+
+```{r}
+library(ComplexHeatmap)
+
+# Get average expression per cluster for selected genes
+avg_exp <- AverageExpression(seurat_obj, features = genes_of_interest, group.by = "seurat_clusters")$RNA
+
+# Optionally scale rows (genes) for heatmap
+scaled_exp <- t(scale(t(avg_exp)))
+
+# Plot with ComplexHeatmap
+Heatmap(scaled_exp,
+        name = "Z-score",
+        row_names_gp = gpar(fontsize = 10),
+        column_names_gp = gpar(fontsize = 10),
+        cluster_rows = TRUE,
+        cluster_columns = TRUE,
+        col = colorRamp2(c(-2, 0, 2), c("blue", "white", "red")))
+
+```
+
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+summary(cars)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
