@@ -1,0 +1,657 @@
+---
+title: "DeSeq2"
+output: html_document
+date: '2025-02-14'
+---
+
+```{r setup, include=FALSE}
+library(DESeq2)
+x<-read.table(file="Mydata.txt",sep="\t",header=T, row.names=1)
+x<-as.matrix(x)
+y<-read.table(file="Coldata.txt",sep="\t",header=T, row.names=1)
+dds<-DESeqDataSetFromMatrix(countData=x,colData=y,design=~TREATMENT1)
+dds<-DESeq(dds)
+res<-results(dds)
+
+contrast1<-c("TREATMENT1","TO","DO")
+contrast2<-c("TREATMENT1","TO","Fib")
+contrast3<-c("TREATMENT1","DO","Fib")
+
+
+
+res_TO_v_DO<-results(dds,contrast1)
+res_TO_v_Fib<-results(dds,contrast2)
+res_DO_v_Fib<-results(dds,contrast3)
+
+
+write.table(as.data.frame(res_TO_v_DO),file="res_TO_v_DO_DESeq2.txt",sep="\t")
+write.table(as.data.frame(res_TO_v_Fib),file="res_TO_v_Fib_DESeq2.txt",sep="\t")
+write.table(as.data.frame(res_DO_v_Fib),file="res_DO_v_Fib_DESeq2.txt",sep="\t")
+
+
+#Volcano plots:
+
+
+library(EnhancedVolcano)
+
+EnhancedVolcano(res_TO_v_DO,
+  lab = rownames(res_TO_v_DO),
+  x = 'log2FoldChange',
+  y = 'padj',
+  xlim = c(-8,8),
+  pCutoff = 0.01,
+  FCcutoff = 2,
+  pointSize = 1.8,
+  labSize = 3.5,
+  title = 'Differential Expression: TO vs DO',
+  subtitle = 'Significance threshold: adj p < 0.01, |log2FC| > 2',
+  caption = 'Positive fold-change = Upregulated in JfbTOs',
+  col = c('grey30', 'forestgreen', 'royalblue', 'red2'),
+  colAlpha = 0.8,
+  cutoffLineCol = 'black',
+  cutoffLineWidth = 0.5,
+  hline = 0.01,
+  hlineCol = 'black',
+  hlineType = 'dashed',
+  hlineWidth = 0.5,
+  gridlines.major = FALSE,
+  gridlines.minor = FALSE,
+  xlab = bquote(~Log[2]~ "fold change"),
+  ylab = bquote(~-Log[10]~adjusted~italic(P)),
+  legendPosition = 'right',
+  legendLabSize = 10,
+  legendIconSize = 3.0
+)
+```
+
+
+***pIC treatments***
+
+```{r}
+library(DESeq2)
+library(tibble)
+
+count_data <- read.csv("MydataJfb.csv", row.names = 1)
+colnames(count_data)
+```
+
+
+```{r}
+sample_names <- colnames(count_data)
+
+metadata <- data.frame(
+  Sample = sample_names,
+  Code = sub("JfbTO(\\d+)_.*", "\\1", sample_names),
+  Treatment = sub(".*_(Mock|pIC)", "\\1", sample_names)
+)
+
+# Set rownames to match colnames of count matrix
+rownames(metadata) <- sample_names
+
+# Confirm alignment
+all(rownames(metadata) == colnames(count_data))
+
+metadata$Code <- factor(metadata$Code)
+metadata$Treatment <- factor(metadata$Treatment, levels = c("Mock", "pIC"))
+
+dds <- DESeqDataSetFromMatrix(
+  countData = count_data,
+  colData = metadata,
+  design = ~ Code + Treatment
+)
+```
+
+
+```{r}
+dds <- DESeq(dds)
+summary(res)
+res_ordered <- res[order(res$padj), ]
+
+res <- results(dds, contrast = c("Treatment", "pIC", "Mock"))
+write.csv(as.data.frame(res_ordered), "DESeq2_results_pIC_vs_Mock_Jfb.csv")
+```
+
+```{r}
+count_data <- read.csv("Mydatahuman.csv", row.names = 1)
+colnames(count_data)
+sample_names <- colnames(count_data)
+metadata <- data.frame(
+  Sample = sample_names,
+  Code = sub("TO(\\d+)_.*", "\\1", sample_names),              # Extracts "0719", "744", "080"
+  Treatment = sub(".*_(Mock|pIC)", "\\1", sample_names)        # Extracts "Mock" or "pIC"
+)
+metadata$Code <- factor(metadata$Code)
+metadata$Treatment <- factor(metadata$Treatment, levels = c("Mock", "pIC")) 
+rownames(metadata) <- sample_names
+
+# Confirm match
+stopifnot(all(rownames(metadata) == colnames(count_data)))
+dds <- DESeqDataSetFromMatrix(
+     countData = count_data,
+     colData = metadata,
+     design = ~ Code + Treatment
+ )
+dds <- DESeq(dds)
+```
+
+***Compare human vs Jfb pIC response***
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(dplyr)
+library(readr)
+library(tibble)
+library(ComplexHeatmap)
+library(circlize)
+library(RColorBrewer)
+library(ggrepel)
+
+
+# Load DESeq2 outputs
+human_res <- read.csv("DESeq2_results_pIC_vs_Mock_Human.csv", row.names = 1)
+jfb_res <- read.csv("DESeq2_results_pIC_vs_Mock_Jfb.csv", row.names = 1)
+
+# Optional: Add a column for species
+human_res$Species <- "Human"
+jfb_res$Species <- "Jfb"
+
+# Combine for panel B
+human_sig <- sum(human_res$padj < 0.05, na.rm = TRUE)
+jfb_sig <- sum(jfb_res$padj < 0.05, na.rm = TRUE)
+deg_counts <- data.frame(Species = c("Human", "Jfb"), Significant_DEGs = c(human_sig, jfb_sig))
+
+```
+
+
+```{r}
+format_volcano <- function(df, padj_cutoff = 0.05, lfc_cutoff = 2) {
+  df <- df %>%
+    mutate(
+      Significance = case_when(
+        is.na(padj) ~ "NS",
+        padj < padj_cutoff & abs(log2FoldChange) > lfc_cutoff ~ "Significant",
+        padj < padj_cutoff | abs(log2FoldChange) > lfc_cutoff ~ "Partial",
+        TRUE ~ "NS"
+      )
+    )
+  return(df)
+}
+
+
+```
+
+```{r}
+plot_volcano <- function(df, species_name, ymax = 275, xmax = 8) {
+  ggplot(df, aes(x = log2FoldChange, y = -log10(pvalue), color = Significance)) +
+    geom_point(alpha = 0.7, size = 1.5) +
+    geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "black", linewidth = 0.5) +
+    geom_vline(xintercept = c(-2, 2), linetype = "dashed", color = "black", linewidth = 0.5) +
+    scale_color_manual(
+      values = c("NS" = "grey70", "Partial" = "#3366CC", "Significant" = "#FF4422")
+    ) +
+    labs(title = species_name, x = "log2 Fold Change", y = "-log10(p-value)") +
+    theme_minimal(base_size = 14) +
+    theme(legend.position = "none") +
+    xlim(-xmax, xmax) + ylim(0, ymax)
+}
+
+# Format results
+human_volcano <- format_volcano(human_res)
+jfb_volcano <- format_volcano(jfb_res)
+
+# Plot
+p1 <- plot_volcano(human_volcano, "Human TOs")
+p2 <- plot_volcano(jfb_volcano, "Jfb TOs")
+
+
+```
+
+
+```{r}
+library(patchwork)
+
+# Combine plots side by side
+combined_volcano <- p1 + p2 + plot_annotation(tag_levels = "A")
+
+# Save to file
+ggsave("volcano_human_vs_jfb.pdf", combined_volcano, width = 12, height = 5, dpi = 300)
+```
+
+
+```{r}
+# Load libraries
+library(dplyr)
+library(ggplot2)
+library(ggrepel)
+library(patchwork)
+library(readr)
+
+# Load DESeq2 results
+human_res <- read_csv("DESeq2_results_pIC_vs_Mock_Human.csv")
+jfb_res   <- read_csv("DESeq2_results_pIC_vs_Mock_Jfb.csv")
+
+# Add gene column
+human_res$gene <- human_res$...1
+jfb_res$gene   <- jfb_res$...1
+rownames(human_res) <- human_res$gene
+rownames(jfb_res) <- jfb_res$gene
+
+# Replace zero p-values or padj to avoid -Inf
+human_res$pvalue[human_res$pvalue == 0] <- 1e-300
+human_res$padj[human_res$padj == 0] <- 1e-300
+jfb_res$pvalue[jfb_res$pvalue == 0] <- 1e-300
+jfb_res$padj[jfb_res$padj == 0] <- 1e-300
+
+# Define gene sets
+isg_genes <- c(
+  "ISG15", "IFIT1", "IFIT2", "IFIT3", "IFIT5", "OAS1", "OAS2", "OAS3", "OASL",
+  "MX1", "MX2", "IFIH1", "IFI27", "IFI35", "IFI44", "IFI44L", "IFI16",
+  "RSAD2", "XAF1", "IRF7", "IRF9", "STAT1", "STAT2", "USP18", "BST2", "EPSTI1",
+  "DDX60", "DDX60L", "TRIM22", "TRIM25", "ISG20", "SP110", "SP100", "HERC5",
+  "HERC6", "ZC3HAV1", "SAMD9", "SAMD9L", "TYMP", "PLSCR1", "PARP9", "PARP12",
+  "PARP14", "B2M", "CXCL10", "CXCL11", "ICAM1", "UBA7", "TAP1", "TAP2", "UBE2L6",
+  "DTX3L", "SHFL", "ZNFX1"
+)
+ifn_genes <- c("IFNL1", "IFNL2", "IFNL3", "IFNL1_1", "IFNL2_1", "IFNL3_1")
+
+# Format function with proper cutoffs
+format_for_volcano <- function(df, species_name) {
+  df %>%
+    mutate(
+      Category = case_when(
+        gene %in% ifn_genes & padj < 0.05 & abs(log2FoldChange) > 2 ~ "IFNL",
+        gene %in% isg_genes & padj < 0.05 & abs(log2FoldChange) > 2 ~ "ISG",
+        padj < 0.05 & abs(log2FoldChange) > 2 ~ "Other_Sig",
+        TRUE ~ "NS"
+      ),
+      GeneLabel = ifelse(Category %in% c("ISG", "IFNL"), gene, NA),
+      Species = species_name
+    )
+}
+
+# Apply formatting
+human_df <- format_for_volcano(human_res, "Human TOs")
+jfb_df   <- format_for_volcano(jfb_res, "Jfb TOs")
+
+# Volcano plot function
+plot_volcano <- function(df) {
+  ggplot(df, aes(x = log2FoldChange, y = -log10(pvalue), color = Category)) +
+    geom_point(alpha = 0.7, size = 1.5) +
+    geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "black") +
+    geom_vline(xintercept = c(-2, 2), linetype = "dashed", color = "black") +
+    scale_color_manual(values = c(
+      "ISG" = "#FF0000",       # Red
+      "IFNL" = "purple",      # Purple
+      "Other_Sig" = "lightblue", # Blue
+      "NS" = "grey80"          # Grey
+    )) +
+    geom_text_repel(
+      aes(label = GeneLabel),
+      size = 3.5,
+      box.padding = 0.3,
+      max.overlaps = 1000,
+      segment.color = "black",
+      na.rm = TRUE
+    ) +
+    labs(
+      title = unique(df$Species),
+      x = "log2 Fold Change",
+      y = "-log10(p-value)"
+    ) +
+    theme_minimal(base_size = 14) +
+    theme(legend.position = "none")
+}
+
+# Create volcano plots
+p1 <- plot_volcano(human_df)
+p2 <- plot_volcano(jfb_df)
+
+# Combine and export
+combined <- p1 + p2 + plot_annotation(tag_levels = "A")
+print(combined)
+
+ggsave("volcano_Human_vs_Jfb_log2GT2.pdf", combined, width = 12, height = 6, dpi = 300)
+
+
+```
+
+```{r}
+# Load libraries
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+
+# Combine DESeq2 results
+combined_df <- bind_rows(human_df, jfb_df)
+
+# Step 1: Add DEG direction based on thresholds
+combined_df <- combined_df %>%
+  mutate(
+    Direction = case_when(
+      padj < 0.05 & log2FoldChange > 2  ~ "Upregulated",
+      padj < 0.05 & log2FoldChange < -2 ~ "Downregulated",
+      TRUE ~ NA_character_
+    )
+  )
+
+# Step 2: Count actual DEG combinations
+deg_direction_counts <- combined_df %>%
+  filter(!is.na(Direction)) %>%
+  count(Species, Direction, name = "DEG_count")
+
+# Step 3: Add zero-count rows for missing combinations
+full_combos <- expand.grid(
+  Species = c("Human TOs", "Jfb TOs"),
+  Direction = c("Upregulated", "Downregulated"),
+  stringsAsFactors = FALSE
+)
+
+deg_direction_counts_complete <- full_combos %>%
+  left_join(deg_direction_counts, by = c("Species", "Direction")) %>%
+  mutate(DEG_count = replace_na(DEG_count, 0))
+
+# Step 4: Plot
+deg_dir_plot <- ggplot(deg_direction_counts_complete, aes(x = Species, y = DEG_count, fill = Direction)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.7), width = 0.6) +
+  geom_text(aes(label = DEG_count), 
+            position = position_dodge(width = 0.7), 
+            vjust = -0.5, size = 4) +
+  scale_fill_manual(values = c("Upregulated" = "#FF4422", "Downregulated" = "#3366CC")) +
+  labs(
+    title = "Differentially Expressed Genes by Direction",
+    subtitle = "log2FC > 2 or < -2 and padj < 0.05",
+    y = "DEG Count",
+    x = ""
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(legend.position = "top")
+
+# Step 5: Save to PDF
+ggsave("deg_dir_plot.pdf", deg_dir_plot, width = 6, height = 6, dpi = 300)
+
+```
+
+```{r}
+# Select genes of interest
+gene_set <- unique(c(isg_genes, ifn_genes))
+human_logfc <- human_df %>% filter(gene %in% gene_set) %>% select(gene, log2FoldChange) %>% rename(Human = log2FoldChange)
+jfb_logfc   <- jfb_df %>% filter(gene %in% gene_set) %>% select(gene, log2FoldChange) %>% rename(Jfb = log2FoldChange)
+
+# Combine
+fc_mat <- full_join(human_logfc, jfb_logfc, by = "gene") %>%
+    column_to_rownames("gene") %>%
+    as.matrix()
+
+# Plot heatmap
+library(ComplexHeatmap)
+Heatmap(fc_mat,
+        name = "log2FC",
+        col = circlize::colorRamp2(c(-4, 0, 6), c("blue", "white", "red")),
+        cluster_columns = FALSE,
+        show_row_names = TRUE,
+        column_title = "Poly I:C Response (log2FC)",
+        row_names_gp = gpar(fontsize = 10))
+```
+
+```{r}
+pdf("ISG_pIC_heatmap.pdf", width = 5, height = 8)
+draw(p1)
+dev.off()
+
+```
+
+**Loliop plot***
+
+```{r}
+gene_set <- unique(c(isg_genes, ifn_genes))
+
+# Human and Jfb log2FCs
+human_fc <- human_df %>%
+  filter(gene %in% gene_set) %>%
+  select(gene, Human = log2FoldChange)
+
+jfb_fc <- jfb_df %>%
+  filter(gene %in% gene_set) %>%
+  select(gene, Jfb = log2FoldChange)
+
+# Join and reshape
+lollipop_data <- full_join(human_fc, jfb_fc, by = "gene") %>%
+  pivot_longer(cols = c("Human", "Jfb"), names_to = "Species", values_to = "log2FC") %>%
+  mutate(
+    gene = factor(gene, levels = rev(sort(unique(gene))))
+  )
+
+lollipop_all <- ggplot(lollipop_data, aes(x = log2FC, y = gene, color = Species)) +
+  geom_segment(aes(x = 0, xend = log2FC, y = gene, yend = gene), size = 0.7) +
+  geom_point(size = 2.2) +
+  scale_color_manual(values = c("Human" = "#FF4422", "Jfb" = "#FFB000")) +
+  labs(
+    title = "Poly I:C-Induced Fold Change in ISG and IFNL Genes",
+    x = "log2 Fold Change",
+    y = NULL
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    legend.position = "top",
+    axis.text.y = element_text(size = 8)
+  )
+
+
+```
+
+**Heatmap of sensors***
+
+```{r}
+# Load required libraries
+library(dplyr)
+library(tibble)
+library(ComplexHeatmap)
+library(circlize)
+
+# Step 1: Load normalized RPKM matrix
+rpkm <- read.csv("counts_shared.csv", row.names = 1, check.names = FALSE)
+
+# Step 2: Define grouped innate immune gene lists
+genes_tlr <- c("TLR1", "TLR2", "TLR3", "TLR4", "TLR5", "TLR6", "TLR7", "TLR8", "TLR9", "TLR10")
+genes_rlr <- c("DDX58", "IFIH1", "DHX58")
+genes_dna <- c("MB21D1", "TMEM173", "IFI16", "ZBP1")
+genes_nod <- c("NOD1", "NOD2")
+genes_adaptors <- c("MAVS", "TICAM1", "MYD88", "TRAF3", "TRAF6", "IRAK1", "IRAK4", "MAP3K7", "TBK1", "IKBKE")
+genes_inflam <- c("NLRP1", "NLRP3", "NLRC4", "AIM2", "PYCARD", "CASP1", "IL1B", "IL18")
+genes_tf <- c("IRF3", "IRF5", "IRF7", "IRF9", "NFKB1", "NFKB2", "RELA", "RELB", "STAT1", "STAT2", "STAT3")
+
+# Combined ordered gene list
+ordered_genes <- c(
+  genes_tlr, genes_rlr, genes_dna, genes_nod,
+  genes_adaptors, genes_inflam, genes_tf
+)
+
+# Step 3: Subset to Mock-treated samples
+mock_samples <- colnames(rpkm)[grepl("Mock", colnames(rpkm), ignore.case = TRUE)]
+
+# Step 4: Subset and preprocess expression matrix
+genes_present <- intersect(ordered_genes, rownames(rpkm))
+expr <- rpkm[genes_present, mock_samples]
+
+# Log2-transform and Z-score scale by gene
+expr_log <- log2(expr + 1)
+expr_scaled <- t(scale(t(expr_log)))
+expr_scaled[!is.finite(expr_scaled)] <- NA
+expr_scaled_clean <- expr_scaled[complete.cases(expr_scaled), ]
+
+# Reorder rows according to manual group order
+expr_scaled_clean <- expr_scaled_clean[intersect(ordered_genes, rownames(expr_scaled_clean)), ]
+
+# Step 5: Create species annotation
+sample_meta <- data.frame(
+  Species = ifelse(grepl("Human", mock_samples, ignore.case = TRUE), "Human", "Jfb")
+)
+rownames(sample_meta) <- mock_samples
+sample_meta$Species <- factor(sample_meta$Species, levels = c("Human", "Jfb"))
+
+sample_annot <- HeatmapAnnotation(
+  df = sample_meta,
+  col = list(Species = c("Human" = "#FF4422", "Jfb" = "#FFB000")),
+  annotation_legend_param = list(title = "Species")
+)
+
+# Step 6: Define row split labels (pathway groupings)
+gene_group_map <- c(
+  setNames(rep("TLR", length(genes_tlr)), genes_tlr),
+  setNames(rep("RLR", length(genes_rlr)), genes_rlr),
+  setNames(rep("DNA sensing", length(genes_dna)), genes_dna),
+  setNames(rep("NOD", length(genes_nod)), genes_nod),
+  setNames(rep("Adaptors", length(genes_adaptors)), genes_adaptors),
+  setNames(rep("Inflammasome", length(genes_inflam)), genes_inflam),
+  setNames(rep("TFs", length(genes_tf)), genes_tf)
+)
+
+row_group_labels <- gene_group_map[rownames(expr_scaled_clean)]
+
+# Step 7: Create and draw the heatmap
+heatmap_manual <- Heatmap(
+  expr_scaled_clean,
+  name = "Z-score",
+  top_annotation = sample_annot,
+  cluster_rows = FALSE,
+  cluster_columns = TRUE,
+  row_split = row_group_labels,
+  show_column_names = TRUE,
+  column_names_gp = gpar(fontsize = 9),
+  row_names_gp = gpar(fontsize = 9),
+  col = colorRamp2(c(-2, 0, 2), c("blue", "white", "red")),
+  column_title = "Basal Expression of Innate Immune Genes (Mock-treated TOs)"
+)
+
+# Step 8: Save to PDF
+pdf("Ordered_Basal_Innate_Immune_Heatmap.pdf", width = 7, height = max(5, 0.28 * nrow(expr_scaled_clean)))
+draw(heatmap_manual)
+dev.off()
+
+```
+
+```{r}
+# Load libraries
+library(dplyr)
+library(tibble)
+library(ComplexHeatmap)
+library(circlize)
+
+# Step 1: Load combined RPKM matrix
+rpkm_all <- read.csv("counts_sharedpIC.csv", row.names = 1, check.names = FALSE)
+
+# Step 2: Define genes of interest
+isg_genes <- c(
+    "ISG15", "IFIT1", "IFIT2", "IFIT3", "IFIT5", "OAS1", "OAS2", "OAS3", "OASL",
+    "MX1", "MX2", "IFIH1", "IFI27", "IFI35", "IFI44", "IFI44L", "IFI16",
+    "RSAD2", "XAF1", "IRF7", "IRF9", "STAT1", "STAT2", "USP18", "BST2", "EPSTI1",
+    "DDX60", "DDX60L", "TRIM22", "TRIM25", "ISG20", "SP110", "SP100", "HERC5",
+    "HERC6", "ZC3HAV1", "SAMD9", "SAMD9L", "TYMP", "PLSCR1", "PARP9", "PARP12",
+    "PARP14", "B2M", "CXCL10", "CXCL11", "ICAM1", "UBA7", "TAP1", "TAP2", "UBE2L6",
+    "DTX3L", "SHFL", "ZNFX1"
+)
+
+ifn_genes <- c("IFNB1", "IFNA1", "IFNA2", "IFNA4", "IFNA6", "IFNA14", "IFNW1", "IFNL1", "IFNL2", "IFNL3")
+
+plot_genes <- unique(c(isg_genes, ifn_genes))
+
+# Step 3: Filter samples and genes
+samples <- c(
+    "TO0719_Mock", "TO744_Mock", "TO080_Mock",
+    "TO0719_pIC",  "TO744_pIC",  "TO080_pIC",
+    "JfbTO02_Mock", "JfbTO03_Mock", "JfbTO04_Mock",
+    "JfbTO02_pIC",  "JfbTO03_pIC",  "JfbTO04_pIC"
+)
+
+genes_present <- intersect(plot_genes, rownames(rpkm_all))
+expr <- rpkm_all[genes_present, samples]
+
+# Step 4: Log-transform and Z-score
+expr_log <- log2(expr + 1)
+expr_scaled <- t(scale(t(expr_log)))
+expr_scaled[!is.finite(expr_scaled)] <- NA
+expr_scaled_clean <- expr_scaled[complete.cases(expr_scaled), ]
+
+# Step 5: Build annotation
+sample_meta <- data.frame(
+    Species = ifelse(grepl("^TO", samples), "Human", "Jfb"),
+    Treatment = ifelse(grepl("pIC", samples, ignore.case = TRUE), "pIC", "Mock")
+)
+rownames(sample_meta) <- samples
+sample_meta$Species <- factor(sample_meta$Species, levels = c("Human", "Jfb"))
+sample_meta$Treatment <- factor(sample_meta$Treatment, levels = c("Mock", "pIC"))
+
+sample_annot <- HeatmapAnnotation(
+    df = sample_meta,
+    col = list(
+        Species = c("Human" = "#FF4422", "Jfb" = "#FFB000"),
+        Treatment = c("Mock" = "gray80", "pIC" = "#3366CC")
+    ),
+    annotation_legend_param = list(
+        Species = list(title = "Species"),
+        Treatment = list(title = "Treatment")
+    )
+)
+
+# Step 6: Plot the heatmap
+heatmap_combined <- Heatmap(
+    expr_scaled_clean,
+    name = "Z-score",
+    top_annotation = sample_annot,
+    cluster_rows = TRUE,
+    cluster_columns = TRUE,
+    show_column_names = TRUE,
+    column_names_gp = gpar(fontsize = 9),
+    row_names_gp = gpar(fontsize = 9),
+    col = colorRamp2(c(-2, 0, 2), c("blue", "white", "red")),
+    column_title = "IFN and ISG Expression in TOs (Mock vs poly I:C)"
+)
+
+# Step 7: Save to PDF
+pdf("Heatmap_IFN_ISG_Mock_vs_pIC.pdf", width = 8, height = max(5, 0.28 * nrow(expr_scaled_clean)))
+draw(heatmap_combined)
+dev.off()
+
+```
+
+```{r}
+gene_list <- c("ISG15", "MX1", "OAS1", "OAS3", "IFI35", "IFIT3", "IFIT2", "IFI30", "ISG20")
+df_long <- rpkm_all[gene_list, ] %>%
+    log2(.) %>% rownames_to_column("Gene") %>%
+    pivot_longer(-Gene, names_to = "Sample", values_to = "Expression") %>%
+    mutate(Species = ifelse(grepl("^TO", Sample), "Human", "Jfb"),
+           Treatment = ifelse(grepl("pIC", Sample), "pIC", "Mock"))
+
+p2<-ggplot(df_long, aes(x = Treatment, y = Expression, fill = Species)) +
+    geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+    geom_jitter(position = position_jitterdodge(jitter.width = 0.2), size = 1) +
+    facet_wrap(~ Gene, scales = "free_y") +
+    scale_fill_manual(values = c("Human" = "#FF4422", "Jfb" = "#FFB000")) +
+    theme_minimal(base_size = 13)
+```
+
+```{r}
+ggsave("Box_pIC.pdf", plot = p2, width = 10, height = 10, units = "in")
+```
+
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+summary(cars)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
