@@ -1,2 +1,2 @@
 # Jamaican-Fruit-Bat-Placental-Tissue-and-Organoids
-This repository contains the code used to analyze bulk RNA sequencing and single nuclei RNA sequencing data from the manuscript "Trophoblast Diversity and Immune Adaptations at the Maternal-Fetal Interface in Bats." 
+This repository contains the analysis code for bulk RNA-seq and single-nucleus RNA-seq data from the manuscript "Cellular and Immune Adaptations at the Maternal–Fetal Interface in Bats." It includes scripts for data preprocessing, integration, differential expression, and visualization. An interactive ShinyApp for exploring the data is available at: https://coynelab.shinyapps.io/bat-placenta-explorer/.
