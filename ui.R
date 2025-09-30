@@ -13,7 +13,12 @@ load_panel <- function(prefix, label) {
         selectInput(paste0(prefix, "_meta"), "UMAP color by (metadata):", choices = NULL),
         selectizeInput(paste0(prefix, "_gene_input"), "Gene (UMAP + violin):", choices = NULL,
                        options = list(placeholder = "Type or paste gene name")),
-        textInput(paste0(prefix, "_multi_gene"), "Genes (comma-separated for DotPlot/heatmap):", value = ""),
+        textInput(paste0(prefix, "_multi_gene"), "Genes for DotPlot/Heatmap:", value = ""),
+        helpText(
+          "Gene names for UMAP can be entered manually or selected from the dropdown menu. 
+   Enter gene names separated by commas (no spaces) for DotPlot/Heatmap. 
+   At least two genes are required to generate a heatmap."
+        ),
         radioButtons(paste0(prefix, "_plot_size"), "Plot size:", c("Small", "Medium", "Large"), selected = "Medium", inline = TRUE),
         radioButtons(paste0(prefix, "_font_size"), "Font size:", c("Small", "Medium", "Large"), selected = "Medium", inline = TRUE)
       ),
