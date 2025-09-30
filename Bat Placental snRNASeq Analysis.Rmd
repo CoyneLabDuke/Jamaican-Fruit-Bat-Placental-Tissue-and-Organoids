@@ -621,7 +621,216 @@ plotExpression(Traj1.scecl, "CRH", x = "slingPseudotime_3",
                colour_by = "ident", show_violin = FALSE, show_smooth = TRUE, point_size=2.0) + scale_color_manual(values=c( "CTB-p" = "#FFD700","CTB-1" = "#FF7F0E", "CTB-2" = "#FF4500",  "CTB-3" = "#D62728",  "STB-1" = "#A020F0", "STB-2" = "#6A0DAD", "STB-3" = "#4B0082"  ))
 ```
 
+```{r Silhoette Scoring}
+## ===== Setup =====
+library(Seurat)
+library(dplyr)
+library(ggplot2)
+library(cluster)    # silhouette()
+library(patchwork)
 
+# Your palette (exactly as provided)
+cluster_colors <- c(
+  "Troph-p"="#FFD700","Troph-1"="#FFA500","Troph-2"="#FF8200","Troph-3"="#FF4500",
+  "Troph-4"="#D73027","Troph-5"="#B22222","Troph-6"="#A50026","Troph-7"="#800000",
+  "Fib-p"="#4682B4","Fib-1"="#0072B2","Fib-2"="#005BBB","Fib-3"="#00429D",
+  "Fib-4"="#1E90FF","Fib-5"="#5B9BD5","Fib-6"="#6FAEDB",
+  "Endo-1"="#00CED1","Endo-2"="#00FFFF","Endo-3"="#5BC0DE","Endo-4"="#468FAF",
+  "Mac-1"="#8B008B","Mac-2"="#E91E63","Mac-3"="#C71585",
+  "Gland"="#6A5ACD","Stroma"="#008000",
+  "T-cell"="#AD1457"
+)
+
+# Keep identities as characters, then relevel (avoid accidental NA coercion)
+Idents(tissue) <- factor(as.character(Idents(tissue)), levels = names(cluster_colors))
+
+## ===== Choose an embedding for distances =====
+reds <- Reductions(tissue)
+red_to_use <- if ("harmony" %in% reds) {
+  "harmony"
+} else if ("umap.harmony" %in% reds) {
+  "umap.harmony"
+} else if ("pca" %in% reds) {
+  "pca"
+} else {
+  stop("No suitable reduction found (looked for 'harmony', 'umap.harmony', 'pca').")
+}
+message("Using reduction: ", red_to_use)
+
+emb <- Embeddings(tissue, red_to_use)
+clu <- Idents(tissue)
+
+# Align, drop NA labels and non-finite embeddings
+cells <- intersect(rownames(emb), names(clu))
+emb   <- emb[cells, , drop = FALSE]
+clu   <- droplevels(clu[cells])
+
+keep <- !is.na(clu) & apply(emb, 1, function(x) all(is.finite(x)))
+emb <- emb[keep, , drop = FALSE]
+clu <- droplevels(clu[keep])
+
+stopifnot(nrow(emb) == length(clu))
+if (nlevels(clu) < 2L) stop("Need at least 2 clusters after filtering.")
+
+## ===== Silhouette computation =====
+d   <- dist(emb)  # Euclidean on chosen embedding
+lab <- as.integer(factor(clu))
+sil <- silhouette(lab, d)
+
+sil_df <- data.frame(
+  cell    = rownames(emb),
+  cluster = as.character(clu),
+  width   = as.numeric(sil[, 3]),
+  stringsAsFactors = FALSE
+)
+
+overall_mean <- mean(sil_df$width)
+
+# Summary table (optional to print)
+sil_summary <- sil_df %>%
+  group_by(cluster) %>%
+  summarise(n = n(),
+            mean = mean(width),
+            median = median(width),
+            q25 = quantile(width, 0.25),
+            q75 = quantile(width, 0.75)) %>%
+  arrange(desc(mean))
+print(sil_summary)
+message("Overall mean silhouette width: ", sprintf("%.3f", overall_mean))
+
+## ===== Plot A: Per-cluster silhouette boxplot =====
+sil_df$cluster <- factor(sil_df$cluster, levels = names(cluster_colors))
+
+p_sil_box <- ggplot(sil_df, aes(x = cluster, y = width, fill = cluster)) +
+  geom_boxplot(outlier.shape = NA, width = 0.6, color = "black") +
+  geom_jitter(width = 0.18, alpha = 0.15, size = 0.35) +
+  geom_hline(yintercept = overall_mean, linetype = 2, linewidth = 0.6) +
+  scale_fill_manual(values = cluster_colors, guide = "none") +
+  coord_flip() +
+  labs(
+    title = "Silhouette widths by cluster",
+    subtitle = paste("Overall mean =", sprintf("%.3f", overall_mean),
+                     "| reduction:", red_to_use),
+    x = "Cluster", y = "Silhouette width"
+  ) +
+  theme_classic(base_size = 12)
+
+## ===== Plot B: Observed vs Random baseline =====
+set.seed(123)
+sil_rand <- silhouette(as.integer(factor(sample(clu))), d)
+mean_rand <- mean(sil_rand[, 3])
+
+obs_vs_rand <- data.frame(
+  which = c(rep("Observed", nrow(sil_df)), rep("Random", length(sil_rand[, 3]))),
+  width = c(sil_df$width, as.numeric(sil_rand[, 3]))
+)
+
+p_obs_rand <- ggplot(obs_vs_rand, aes(x = which, y = width)) +
+  geom_violin(color = "black", fill = "grey92", trim = TRUE) +
+  geom_boxplot(width = 0.16, outlier.shape = NA) +
+  geom_hline(yintercept = 0, linetype = 3) +
+  annotate("text", x = 1, y = max(obs_vs_rand$width, na.rm = TRUE),
+           label = paste0("Mean observed = ", sprintf("%.3f", overall_mean)),
+           vjust = -0.5, size = 3.5) +
+  annotate("text", x = 2, y = max(obs_vs_rand$width, na.rm = TRUE) - 0.05,
+           label = paste0("Mean random = ", sprintf("%.3f", mean_rand)),
+           vjust = -0.5, size = 3.5) +
+  labs(title = "Observed vs Random silhouette widths", x = NULL, y = "Silhouette width") +
+  theme_classic(base_size = 12)
+
+reds <- Reductions(tissue)
+umap_name <- if ("umap.harmony" %in% reds) "umap.harmony" else if ("umap" %in% reds) "umap" else NA
+
+p_umap_sil <- NULL
+if (!is.na(umap_name)) {
+    umap_mat <- Embeddings(tissue, umap_name)
+    if (ncol(umap_mat) < 2) stop(umap_name, " has <2 dimensions.")
+    # Build a DF with guaranteed column names
+    umap_df <- data.frame(
+        UMAP_1 = umap_mat[, 1],
+        UMAP_2 = umap_mat[, 2],
+        cell   = rownames(umap_mat),
+        check.names = FALSE
+    )
+    # Join silhouette widths (assumes sil_df from earlier)
+    plot_df <- merge(umap_df, sil_df[, c("cell","width")], by = "cell", all.x = TRUE)
+    
+    library(ggplot2)
+    p_umap_sil <- ggplot(plot_df, aes(UMAP_1, UMAP_2, color = width)) +
+        geom_point(size = 0.3, alpha = 0.8) +
+        scale_color_gradient2(low = "navy", mid = "white", high = "firebrick", midpoint = 0) +
+        theme_classic(base_size = 12) +
+        labs(title = paste("Silhouette width on", umap_name), color = "Silhouette")
+    
+    ggsave("C_umap_colored_by_silhouette.pdf", p_umap_sil, width = 5.2, height = 4.6, units = "in")
+}
+
+## ===== Save (PDFs) =====
+ggsave("A_silhouette_by_cluster.pdf", p_sil_box, width = 6.5, height = 4.8, units = "in")
+ggsave("B_observed_vs_random_silhouette.pdf", p_obs_rand, width = 4.8, height = 4.2, units = "in")
+if (!is.null(p_umap_sil)) ggsave("C_umap_colored_by_silhouette.pdf", p_umap_sil, width = 5.2, height = 4.6, units = "in")
+
+# Optional: combine A + B
+combo <- p_sil_box + p_obs_rand + plot_layout(widths = c(1.2, 1))
+ggsave("Silhouette_panels_combined.pdf", combo, width = 11, height = 4.8, units = "in")
+```
+
+```{r Top genes per cluster heatmap}
+
+library(Seurat)
+library(dplyr)
+library(ComplexHeatmap)
+library(circlize)
+
+# 0) Your palette and cluster order
+cluster_colors <- c(
+    "Troph-p"="#FFD700","Troph-1"="#FFA500","Troph-2"="#FF8200","Troph-3"="#FF4500",
+    "Troph-4"="#D73027","Troph-5"="#B22222","Troph-6"="#A50026","Troph-7"="#800000",
+    "Fib-p"="#4682B4","Fib-1"="#0072B2","Fib-2"="#005BBB","Fib-3"="#00429D",
+    "Fib-4"="#1E90FF","Fib-5"="#5B9BD5","Fib-6"="#6FAEDB",
+    "Endo-1"="#00CED1","Endo-2"="#00FFFF","Endo-3"="#5BC0DE","Endo-4"="#468FAF",
+    "Mac-1"="#8B008B","Mac-2"="#E91E63","Mac-3"="#C71585",
+    "Gland"="#6A5ACD","Stroma"="#008000",
+    "T-cell"="#AD1457"
+)
+Idents(tissue) <- factor(as.character(Idents(tissue)), levels = names(cluster_colors))
+
+# 1) Top 5 markers per cluster (or use your existing markers table)
+markers <- FindAllMarkers(tissue, assay="RNA", only.pos=TRUE, min.pct=0.25, logfc.threshold=0.25)
+top5 <- markers %>% group_by(cluster) %>% slice_max(avg_log2FC, n=5, with_ties=FALSE) %>% ungroup()
+genes_use <- unique(top5$gene)
+
+# 2) Cluster-averaged expression (genes x clusters)
+avg <- AverageExpression(tissue, assays="RNA", features=genes_use, return.seurat=FALSE)$RNA
+# keep cluster order per palette
+avg <- avg[, intersect(names(cluster_colors), colnames(avg)), drop=FALSE]
+
+# 3) Row z-score, cap for print
+z <- t(scale(t(avg))); z[is.na(z)] <- 0; z[z>2] <- 2; z[z< -2] <- -2
+# order rows by cluster then logFC (nice diagonal effect)
+top5 <- top5 %>% mutate(cluster=factor(cluster, levels=colnames(z))) %>% arrange(cluster, desc(avg_log2FC))
+z <- z[top5$gene, , drop=FALSE]
+row_split <- top5$cluster
+
+# 4) Heatmap — equal column widths by construction (one col/cluster)
+col_fun <- colorRamp2(c(-2,0,2), c("navy","white","firebrick"))
+top_annot <- HeatmapAnnotation(
+    Cluster = factor(colnames(z), levels=names(cluster_colors)),
+    col = list(Cluster = cluster_colors)
+)
+ht <- Heatmap(
+    z, name="Z-score", col=col_fun,
+    top_annotation = top_annot,
+    cluster_rows = FALSE, cluster_columns = FALSE,
+    show_row_names = TRUE, row_names_gp = gpar(fontsize=7),
+    show_column_names = TRUE, column_names_gp = gpar(fontsize=9),
+    row_split = row_split,
+    width = unit(1, "npc")   # fills page; columns equal by design
+)
+ht
+# pdf("tissue_top5_clusterAVG.pdf", width=7, height=9); draw(ht); dev.off()
+
+```
 
 ```{r stub}
 This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
