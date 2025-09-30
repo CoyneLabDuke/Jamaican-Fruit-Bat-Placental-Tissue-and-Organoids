@@ -1076,7 +1076,177 @@ Heatmap(scaled_exp,
 
 ```
 
+```#Cell Cycle Scoring
+## Minimal  genes (orthologs)
+cc_s_genes   <- c("MCM5","PCNA","TYMS","FEN1","MCM2","MCM4","RRM1","UNG","GINS2",
+                   "MCM6","CDCA7","DTL","PRIM1","UHRF1","HELLS","RFC2","RPA2","NASP",
+                   "RAD51AP1","GMNN","WDR76","SLBP","CCNE2","UBR7","POLD3","MSH2",
+                   "ATAD2","RAD51","RRM2","CDC45","CDC6","EXO1","TIPIN","DSCC1",
+                   "BLM","CASP8AP2","USP1","CLSPN","POLA1","CHAF1B","BRIP1","E2F8")
+cc_g2m_genes <- c("HMGB2","CDK1","NUSAP1","UBE2C","BIRC5","TPX2","TOP2A","NDC80",
+                   "CKS2","NUF2","CKS1B","MKI67","TMPO","CENPF","TACC3","FAM64A",
+                   "SMC4","CCNB2","CKAP2L","CKAP2","AURKB","BUB1","KIF11","ANP32E",
+                   "TUBB4B","GTSE1","KIF20B","HJURP","CDCA3","CDC20","TTK","CDC25C",
+                   "KIF2C","RANGAP1","NCAPD2","DLGAP5","CDCA2","CDCA8","ECT2","KIF23",
+                   "HMMR","AURKA","PSRC1","ANLN","LBR","CKAP5","CENPE","CTCF","NEK2",
+                   "G2E3","GAS2L3","CBX5","CENPA")
 
+ ## Score per object (uses current DefaultAssay)
+TOs     <- CellCycleScoring(TOs,     s.features = cc_s_genes, g2m.features = cc_g2m_genes, set.ident = FALSE)
+trophs  <- CellCycleScoring(trophs,  s.features = cc_s_genes, g2m.features = cc_g2m_genes, set.ident = FALSE)
+
+TOs$stim    <- "TOs"
+trophs$stim <- "tissue_trophs"
+ 
+VlnPlot(TOs, c("S.Score","G2M.Score"))
+VlnPlot(trophs, c("S.Score","G2M.Score"))
+
+```Silhouette Scoring
+library(Seurat)
+library(dplyr)
+library(ggplot2)
+library(cluster)    
+library(patchwork)
+
+#  palette 
+cluster_colors <- c(
+  "1"="#FFD700","0"="#FF8200","2"="#B22222",
+  "3"="#4682B4",
+  "4"="#8B008B"
+)
+
+
+## ===== Choose an embedding for distances =====
+reds <- Reductions(TOs)
+red_to_use <- if ("cca" %in% reds) {
+  "harmony"
+} else if ("umap.cca" %in% reds) {
+  "umap.cca"
+} else if ("pca" %in% reds) {
+  "pca"
+} else {
+  stop("No suitable reduction found (looked for 'cca', 'umap.cca', 'pca').")
+}
+message("Using reduction: ", red_to_use)
+
+emb <- Embeddings(TOs, red_to_use)
+clu <- Idents(TOs)
+
+# Align, drop NA labels and non-finite embeddings
+cells <- intersect(rownames(emb), names(clu))
+emb   <- emb[cells, , drop = FALSE]
+clu   <- droplevels(clu[cells])
+
+keep <- !is.na(clu) & apply(emb, 1, function(x) all(is.finite(x)))
+emb <- emb[keep, , drop = FALSE]
+clu <- droplevels(clu[keep])
+
+stopifnot(nrow(emb) == length(clu))
+if (nlevels(clu) < 2L) stop("Need at least 2 clusters after filtering.")
+
+## ===== Silhouette computation =====
+d   <- dist(emb)  # Euclidean on chosen embedding
+lab <- as.integer(factor(clu))
+sil <- silhouette(lab, d)
+
+sil_df <- data.frame(
+  cell    = rownames(emb),
+  cluster = as.character(clu),
+  width   = as.numeric(sil[, 3]),
+  stringsAsFactors = FALSE
+)
+
+overall_mean <- mean(sil_df$width)
+
+# Summary table (optional to print)
+sil_summary <- sil_df %>%
+  group_by(cluster) %>%
+  summarise(n = n(),
+            mean = mean(width),
+            median = median(width),
+            q25 = quantile(width, 0.25),
+            q75 = quantile(width, 0.75)) %>%
+  arrange(desc(mean))
+print(sil_summary)
+message("Overall mean silhouette width: ", sprintf("%.3f", overall_mean))
+
+## ===== Plot A: Per-cluster silhouette boxplot =====
+sil_df$cluster <- factor(sil_df$cluster, levels = names(cluster_colors))
+
+p_sil_box <- ggplot(sil_df, aes(x = cluster, y = width, fill = cluster)) +
+  geom_boxplot(outlier.shape = NA, width = 0.6, color = "black") +
+  geom_jitter(width = 0.18, alpha = 0.15, size = 0.35) +
+  geom_hline(yintercept = overall_mean, linetype = 2, linewidth = 0.6) +
+  scale_fill_manual(values = cluster_colors, guide = "none") +
+  coord_flip() +
+  labs(
+    title = "Silhouette widths by cluster",
+    subtitle = paste("Overall mean =", sprintf("%.3f", overall_mean),
+                     "| reduction:", red_to_use),
+    x = "Cluster", y = "Silhouette width"
+  ) +
+  theme_classic(base_size = 12)
+
+## ===== Plot B: Observed vs Random baseline =====
+set.seed(123)
+sil_rand <- silhouette(as.integer(factor(sample(clu))), d)
+mean_rand <- mean(sil_rand[, 3])
+
+obs_vs_rand <- data.frame(
+  which = c(rep("Observed", nrow(sil_df)), rep("Random", length(sil_rand[, 3]))),
+  width = c(sil_df$width, as.numeric(sil_rand[, 3]))
+)
+
+p_obs_rand <- ggplot(obs_vs_rand, aes(x = which, y = width)) +
+  geom_violin(color = "black", fill = "grey92", trim = TRUE) +
+  geom_boxplot(width = 0.16, outlier.shape = NA) +
+  geom_hline(yintercept = 0, linetype = 3) +
+  annotate("text", x = 1, y = max(obs_vs_rand$width, na.rm = TRUE),
+           label = paste0("Mean observed = ", sprintf("%.3f", overall_mean)),
+           vjust = -0.5, size = 3.5) +
+  annotate("text", x = 2, y = max(obs_vs_rand$width, na.rm = TRUE) - 0.05,
+           label = paste0("Mean random = ", sprintf("%.3f", mean_rand)),
+           vjust = -0.5, size = 3.5) +
+  labs(title = "Observed vs Random silhouette widths", x = NULL, y = "Silhouette width") +
+  theme_classic(base_size = 12)
+
+reds <- Reductions(TOs)
+umap_name <- if ("umap.cca" %in% reds) "umap.cca" else if ("umap" %in% reds) "umap" else NA
+
+p_umap_sil <- NULL
+if (!is.na(umap_name)) {
+    umap_mat <- Embeddings(TOs, umap_name)
+    if (ncol(umap_mat) < 2) stop(umap_name, " has <2 dimensions.")
+    # Build a DF with guaranteed column names
+    umap_df <- data.frame(
+        UMAP_1 = umap_mat[, 1],
+        UMAP_2 = umap_mat[, 2],
+        cell   = rownames(umap_mat),
+        check.names = FALSE
+    )
+    # Join silhouette widths (assumes sil_df from earlier)
+    plot_df <- merge(umap_df, sil_df[, c("cell","width")], by = "cell", all.x = TRUE)
+    
+    library(ggplot2)
+    p_umap_sil <- ggplot(plot_df, aes(UMAP_1, UMAP_2, color = width)) +
+        geom_point(size = 0.3, alpha = 0.8) +
+        scale_color_gradient2(low = "navy", mid = "white", high = "firebrick", midpoint = 0) +
+        theme_classic(base_size = 12) +
+        labs(title = paste("Silhouette width on", umap_name), color = "Silhouette")
+    
+    ggsave("C_umap_colored_by_silhouette.pdf", p_umap_sil, width = 5.2, height = 4.6, units = "in")
+}
+
+## ===== Save (PDFs) =====
+ggsave("A_silhouette_by_cluster.pdf", p_sil_box, width = 6.5, height = 4.8, units = "in")
+ggsave("B_observed_vs_random_silhouette.pdf", p_obs_rand, width = 4.8, height = 4.2, units = "in")
+if (!is.null(p_umap_sil)) ggsave("C_umap_colored_by_silhouette.pdf", p_umap_sil, width = 5.2, height = 4.6, units = "in")
+
+# Optional: combine A + B
+combo <- p_sil_box + p_obs_rand + plot_layout(widths = c(1.2, 1))
+ggsave("Silhouette_panels_combined.pdf", combo, width = 11, height = 4.8, units = "in")
+
+```
 ## R Markdown
 
 This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
